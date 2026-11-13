@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TikTok Shop Calculator & Seller ID</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand">
+        <img src="icons/icon32.png" width="30" height="30" alt="TikTok Shop Calc" class="logo-img" />
+        <div>
+          <h1 class="app-title">TikTok Content Calc</h1>
+          <p class="app-subtitle">Content report Calculator</p>
+        </div>
+      </div>
+      <div id="connection-status" class="status-badge status-waiting">
+        <span class="status-dot"></span>
+        <span id="status-text">Scanning...</span>
+      </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      <!-- Empty State -->
+      <section id="empty-state" class="state-card hidden">
+        <div class="state-icon">🔍</div>
+        <h2 class="state-title">No Seller ID Detected</h2>
+        <p class="state-desc">
+          Please open or refresh your <strong>TikTok Shop Seller Center</strong> tab to capture shop data.
+        </p>
+        <button type="button" id="btn-open-seller" class="btn btn-primary">
+          Open TikTok Seller Center
+        </button>
+      </section>
+
+      <!-- Seller Data Card -->
+      <section id="seller-section" class="seller-section hidden">
+        <!-- Primary Seller ID Display with Modern Copy Button -->
+        <div class="seller-id-card">
+          <div class="seller-id-header">
+            <span class="badge badge-country" id="shop-country">--</span>
+            <span class="shop-name-title" id="shop-name">Shop Name</span>
+          </div>
+
+          <div class="code-box-wrapper">
+            <div class="code-box">
+              <code id="formatted-seller-id" class="code-value">--.TTK.--</code>
+              
+              <!-- Modern Web Guidance Copy Button with command/commandfor and live region outside -->
+              <span class="copy-wrapper">
+                <button type="button" 
+                        class="copy-button" 
+                        command="--copy" 
+                        commandfor="formatted-seller-id" 
+                        aria-label="Copy Seller ID" 
+                        title="Copy Seller ID">
+                  <svg class="icon copy-icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                  <svg class="icon check-icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="20 6 9 17 4 12"></polyline>
+                  </svg>
+                </button>
+                <span class="tip" role="status"></span>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Calculator Prep Section -->
+        <div class="calculator-preview">
+          <div class="calc-header">
+            <span class="calc-badge">Coming Soon</span>
+            <h3 class="calc-title">Report Calculator</h3>
+          </div>
+          <p class="calc-desc">
+            Ready to calculate GMV, Impression, and Product Impression for this seller.
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer Controls -->
+    <footer class="app-footer">
+      <button type="button" id="btn-refresh" class="btn btn-secondary" title="Refresh current tab">
+        <svg class="btn-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M23 4v6h-6"></path>
+          <path d="M1 20v-6h6"></path>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+        </svg>
+        Refresh
+      </button>
+      <button type="button" id="btn-clear" class="btn btn-ghost" title="Clear stored data">
+        Clear Data
+      </button>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
