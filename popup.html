@@ -72,28 +72,67 @@
           </div>
         </div>
 
-        <!-- Report Navigation Section (Step 1: LIVE & Video Details) -->
+        <!-- Report Navigation & Workflow Section -->
         <div class="report-routes-card">
           <div class="routes-header">
-            <span class="routes-title">Report Sources (Max 4 Reports)</span>
+            <span class="routes-title">1. Date Range (Start &amp; End)</span>
             <span class="routes-Region-hint" id="region-param-badge">?shop_region=--</span>
           </div>
+
+          <div class="date-range-grid">
+            <label class="date-field">
+              <span class="date-label">Start Date</span>
+              <input type="date" id="input-start-date" class="date-input" />
+            </label>
+            <label class="date-field">
+              <span class="date-label">End Date</span>
+              <input type="date" id="input-end-date" class="date-input" />
+            </label>
+          </div>
+
+          <div class="routes-header routes-subheader">
+            <span class="routes-title">2. Report Sources (Max 4 Reports)</span>
+          </div>
+
           <div class="routes-actions">
             <button type="button" id="btn-go-live-details" class="btn btn-route" title="Navigate active tab to LIVE Details">
               <span class="route-info">
                 <span class="route-name">LIVE &rarr; Details</span>
-                <span class="route-sub">Up to 2 reports</span>
+                <span class="route-sub">Linked + Affiliate (2)</span>
               </span>
               <span class="route-arrow">&rarr;</span>
             </button>
             <button type="button" id="btn-go-video-details" class="btn btn-route" title="Navigate active tab to Video Details">
               <span class="route-info">
                 <span class="route-name">Video &rarr; Details</span>
-                <span class="route-sub">Up to 2 reports</span>
+                <span class="route-sub">Linked + Affiliate (2)</span>
               </span>
               <span class="route-arrow">&rarr;</span>
             </button>
           </div>
+
+          <ul class="report-checklist" id="report-checklist" aria-label="Target reports">
+            <li class="checklist-item" data-report="live_linked">
+              <span class="check-dot"></span>
+              <span class="check-label">LIVE &middot; Linked accounts</span>
+              <span class="check-status">Pending</span>
+            </li>
+            <li class="checklist-item" data-report="live_affiliate">
+              <span class="check-dot"></span>
+              <span class="check-label">LIVE &middot; Affiliate accounts</span>
+              <span class="check-status">Pending</span>
+            </li>
+            <li class="checklist-item" data-report="video_linked">
+              <span class="check-dot"></span>
+              <span class="check-label">Video &middot; Linked accounts</span>
+              <span class="check-status">Pending</span>
+            </li>
+            <li class="checklist-item" data-report="video_affiliate">
+              <span class="check-dot"></span>
+              <span class="check-label">Video &middot; Affiliate accounts</span>
+              <span class="check-status">Pending</span>
+            </li>
+          </ul>
         </div>
 
         <!-- Calculator Prep Section -->

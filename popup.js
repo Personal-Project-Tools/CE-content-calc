@@ -107,8 +107,52 @@ document.addEventListener('DOMContentLoaded', () => {
   const regionParamBadge = document.getElementById('region-param-badge');
   const btnGoLiveDetails = document.getElementById('btn-go-live-details');
   const btnGoVideoDetails = document.getElementById('btn-go-video-details');
+  const inputStartDate = document.getElementById('input-start-date');
+  const inputEndDate = document.getElementById('input-end-date');
 
   let currentReportUrls = null;
+
+  function getDefaultYesterdayStr() {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  function loadStoredDateRange() {
+    chrome.storage.local.get(['ttk_date_range'], (res) => {
+      const fallback = getDefaultYesterdayStr();
+      const range = res.ttk_date_range || { start_date: fallback, end_date: fallback };
+      if (inputStartDate) inputStartDate.value = range.start_date || fallback;
+      if (inputEndDate) inputEndDate.value = range.end_date || fallback;
+      if (!res.ttk_date_range) {
+        chrome.storage.local.set({ ttk_date_range: range });
+      }
+    });
+  }
+
+  function saveDateRange() {
+    if (!inputStartDate || !inputEndDate) return;
+    let startVal = inputStartDate.value;
+    let endVal = inputEndDate.value;
+    if (startVal && endVal && startVal > endVal) {
+      // Keep end_date >= start_date
+      endVal = startVal;
+      inputEndDate.value = endVal;
+    }
+    chrome.storage.local.set({
+      ttk_date_range: {
+        start_date: startVal,
+        end_date: endVal
+      }
+    });
+  }
+
+  if (inputStartDate) inputStartDate.addEventListener('change', saveDateRange);
+  if (inputEndDate) inputEndDate.addEventListener('change', saveDateRange);
+  loadStoredDateRange();
 
   function buildFallbackReportUrls(country, tabUrl) {
     const region = (country || 'SG').toUpperCase();

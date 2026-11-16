@@ -355,6 +355,86 @@ body {
   border-radius: 4px;
 }
 
+.routes-subheader {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color);
+}
+
+.date-range-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.date-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.date-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.date-input {
+  background-color: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-family);
+  font-size: 11px;
+  padding: 5px 7px;
+  width: 100%;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.date-input:focus {
+  border-color: var(--accent-blue);
+}
+
+.report-checklist {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-color);
+}
+
+.checklist-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background-color: rgba(255, 255, 255, 0.02);
+}
+
+.check-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.check-label {
+  color: var(--text-secondary);
+  flex: 1;
+}
+
+.check-status {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
 .routes-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
