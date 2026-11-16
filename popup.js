@@ -107,10 +107,16 @@ document.addEventListener('DOMContentLoaded', () => {
   const regionParamBadge = document.getElementById('region-param-badge');
   const btnGoLiveDetails = document.getElementById('btn-go-live-details');
   const btnGoVideoDetails = document.getElementById('btn-go-video-details');
-  const inputStartDate = document.getElementById('input-start-date');
-  const inputEndDate = document.getElementById('input-end-date');
+
+  const modeBtnDay = document.getElementById('mode-btn-day');
+  const modeBtnMonth = document.getElementById('mode-btn-month');
+  const fieldDayWrapper = document.getElementById('field-day-wrapper');
+  const fieldMonthWrapper = document.getElementById('field-month-wrapper');
+  const inputSingleDate = document.getElementById('input-single-date');
+  const inputTargetMonth = document.getElementById('input-target-month');
 
   let currentReportUrls = null;
+  let currentPeriodMode = 'day'; // 'day' | 'month'
 
   function getDefaultYesterdayStr() {
     const d = new Date();
@@ -121,38 +127,77 @@ document.addEventListener('DOMContentLoaded', () => {
     return `${yyyy}-${mm}-${dd}`;
   }
 
-  function loadStoredDateRange() {
-    chrome.storage.local.get(['ttk_date_range'], (res) => {
-      const fallback = getDefaultYesterdayStr();
-      const range = res.ttk_date_range || { start_date: fallback, end_date: fallback };
-      if (inputStartDate) inputStartDate.value = range.start_date || fallback;
-      if (inputEndDate) inputEndDate.value = range.end_date || fallback;
-      if (!res.ttk_date_range) {
-        chrome.storage.local.set({ ttk_date_range: range });
-      }
-    });
+  function getDefaultPreviousMonthStr() {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 1);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    return `${yyyy}-${mm}`;
   }
 
-  function saveDateRange() {
-    if (!inputStartDate || !inputEndDate) return;
-    let startVal = inputStartDate.value;
-    let endVal = inputEndDate.value;
-    if (startVal && endVal && startVal > endVal) {
-      // Keep end_date >= start_date
-      endVal = startVal;
-      inputEndDate.value = endVal;
+  function applyModeUI(mode) {
+    currentPeriodMode = mode === 'month' ? 'month' : 'day';
+    const isDay = currentPeriodMode === 'day';
+
+    if (modeBtnDay && modeBtnMonth) {
+      modeBtnDay.classList.toggle('active', isDay);
+      modeBtnDay.setAttribute('aria-selected', String(isDay));
+      modeBtnMonth.classList.toggle('active', !isDay);
+      modeBtnMonth.setAttribute('aria-selected', String(!isDay));
     }
-    chrome.storage.local.set({
-      ttk_date_range: {
-        start_date: startVal,
-        end_date: endVal
+
+    if (fieldDayWrapper && fieldMonthWrapper) {
+      fieldDayWrapper.classList.toggle('hidden', !isDay);
+      fieldMonthWrapper.classList.toggle('hidden', isDay);
+    }
+  }
+
+  function loadStoredPeriodConfig() {
+    chrome.storage.local.get(['ttk_period_config'], (res) => {
+      const defaultDate = getDefaultYesterdayStr();
+      const defaultMonth = getDefaultPreviousMonthStr();
+      const config = res.ttk_period_config || {
+        mode: 'day',
+        date: defaultDate,
+        month: defaultMonth
+      };
+
+      if (inputSingleDate) inputSingleDate.value = config.date || defaultDate;
+      if (inputTargetMonth) inputTargetMonth.value = config.month || defaultMonth;
+      applyModeUI(config.mode || 'day');
+
+      if (!res.ttk_period_config) {
+        chrome.storage.local.set({ ttk_period_config: config });
       }
     });
   }
 
-  if (inputStartDate) inputStartDate.addEventListener('change', saveDateRange);
-  if (inputEndDate) inputEndDate.addEventListener('change', saveDateRange);
-  loadStoredDateRange();
+  function savePeriodConfig() {
+    const config = {
+      mode: currentPeriodMode,
+      date: inputSingleDate?.value || getDefaultYesterdayStr(),
+      month: inputTargetMonth?.value || getDefaultPreviousMonthStr()
+    };
+    chrome.storage.local.set({ ttk_period_config: config });
+  }
+
+  if (modeBtnDay) {
+    modeBtnDay.addEventListener('click', () => {
+      applyModeUI('day');
+      savePeriodConfig();
+    });
+  }
+
+  if (modeBtnMonth) {
+    modeBtnMonth.addEventListener('click', () => {
+      applyModeUI('month');
+      savePeriodConfig();
+    });
+  }
+
+  if (inputSingleDate) inputSingleDate.addEventListener('change', savePeriodConfig);
+  if (inputTargetMonth) inputTargetMonth.addEventListener('change', savePeriodConfig);
+  loadStoredPeriodConfig();
 
   function buildFallbackReportUrls(country, tabUrl) {
     const region = (country || 'SG').toUpperCase();

@@ -75,18 +75,33 @@
         <!-- Report Navigation & Workflow Section -->
         <div class="report-routes-card">
           <div class="routes-header">
-            <span class="routes-title">1. Date Range (Start &amp; End)</span>
+            <span class="routes-title">1. Task Mode &amp; Period</span>
             <span class="routes-Region-hint" id="region-param-badge">?shop_region=--</span>
           </div>
 
-          <div class="date-range-grid">
+          <!-- Mode Switcher: Single Day vs Month -->
+          <div class="mode-switch" role="tablist" aria-label="Report period mode">
+            <button type="button" id="mode-btn-day" class="mode-btn active" data-mode="day" role="tab" aria-selected="true">
+              Single Day (Daily)
+            </button>
+            <button type="button" id="mode-btn-month" class="mode-btn" data-mode="month" role="tab" aria-selected="false">
+              Month (Monthly)
+            </button>
+          </div>
+
+          <!-- Single Day Input -->
+          <div id="field-day-wrapper" class="period-field-wrapper">
             <label class="date-field">
-              <span class="date-label">Start Date</span>
-              <input type="date" id="input-start-date" class="date-input" />
+              <span class="date-label">Target Date (LIVE: 1 click &middot; Video: 2 clicks)</span>
+              <input type="date" id="input-single-date" class="date-input" />
             </label>
+          </div>
+
+          <!-- Month Input -->
+          <div id="field-month-wrapper" class="period-field-wrapper hidden">
             <label class="date-field">
-              <span class="date-label">End Date</span>
-              <input type="date" id="input-end-date" class="date-input" />
+              <span class="date-label">Target Month (Selects full month on calendar)</span>
+              <input type="month" id="input-target-month" class="date-input" />
             </label>
           </div>
 
