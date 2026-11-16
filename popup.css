@@ -320,6 +320,93 @@ body {
   }
 }
 
+/* Report Routes Card */
+.report-routes-card {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.routes-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.routes-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.routes-Region-hint {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  color: var(--accent-cyan);
+  background: rgba(37, 244, 238, 0.1);
+  border: 1px solid rgba(37, 244, 238, 0.25);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.routes-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.btn-route {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  text-align: left;
+  color: var(--text-primary);
+  width: 100%;
+}
+
+.btn-route:hover {
+  background-color: var(--bg-card-hover);
+  border-color: var(--accent-blue);
+}
+
+.route-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.route-name {
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.route-sub {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.route-arrow {
+  font-size: 13px;
+  color: var(--text-secondary);
+  transition: transform 0.15s ease;
+}
+
+.btn-route:hover .route-arrow {
+  transform: translateX(2px);
+  color: var(--accent-blue);
+}
+
 /* Calculator Preview Box */
 .calculator-preview {
   background: linear-gradient(135deg, rgba(254, 44, 85, 0.08), rgba(37, 244, 238, 0.08));

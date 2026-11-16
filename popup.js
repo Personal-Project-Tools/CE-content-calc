@@ -104,6 +104,39 @@ document.addEventListener('DOMContentLoaded', () => {
   const shopCountry = document.getElementById('shop-country');
   const shopName = document.getElementById('shop-name');
   const formattedSellerId = document.getElementById('formatted-seller-id');
+  const regionParamBadge = document.getElementById('region-param-badge');
+  const btnGoLiveDetails = document.getElementById('btn-go-live-details');
+  const btnGoVideoDetails = document.getElementById('btn-go-video-details');
+
+  let currentReportUrls = null;
+
+  function buildFallbackReportUrls(country, tabUrl) {
+    const region = (country || 'SG').toUpperCase();
+    let origin = `https://seller-${region.toLowerCase()}.tiktok.com`;
+    try {
+      if (tabUrl && tabUrl.includes('tiktok')) {
+        origin = new URL(tabUrl).origin;
+      }
+    } catch {
+      // keep default origin
+    }
+    return {
+      live_details: `${origin}/compass/live-analysis/live-details?shop_region=${encodeURIComponent(region)}`,
+      video_details: `${origin}/compass/video-analytics/video-details?platform_data_source=shop&shop_region=${encodeURIComponent(region)}`
+    };
+  }
+
+  function navigateActiveTab(targetUrl) {
+    if (!targetUrl) return;
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const activeTab = tabs[0];
+      if (activeTab?.id) {
+        chrome.tabs.update(activeTab.id, { url: targetUrl });
+      } else {
+        chrome.tabs.create({ url: targetUrl });
+      }
+    });
+  }
 
   const btnRefresh = document.getElementById('btn-refresh');
   const btnClear = document.getElementById('btn-clear');
@@ -150,9 +183,24 @@ document.addEventListener('DOMContentLoaded', () => {
     emptyState.classList.add('hidden');
     sellerSection.classList.remove('hidden');
 
-    shopCountry.textContent = shop.country || '--';
+    const country = shop.country || '--';
+    shopCountry.textContent = country;
     shopName.textContent = shop.seller_name || 'TikTok Shop Seller';
     formattedSellerId.textContent = shop.formatted_seller_id;
+
+    if (regionParamBadge) {
+      regionParamBadge.textContent = `?shop_region=${country}`;
+    }
+
+    currentReportUrls =
+      shop.report_urls || buildFallbackReportUrls(country, payload.endpoint_url);
+
+    if (btnGoLiveDetails) {
+      btnGoLiveDetails.title = currentReportUrls.live_details;
+    }
+    if (btnGoVideoDetails) {
+      btnGoVideoDetails.title = currentReportUrls.video_details;
+    }
   }
 
   function showEmptyState() {
@@ -183,6 +231,24 @@ document.addEventListener('DOMContentLoaded', () => {
   btnOpenSeller.addEventListener('click', () => {
     chrome.tabs.create({ url: 'https://seller.tiktok.com' });
   });
+
+  // Navigate to LIVE -> Details
+  if (btnGoLiveDetails) {
+    btnGoLiveDetails.addEventListener('click', () => {
+      if (currentReportUrls?.live_details) {
+        navigateActiveTab(currentReportUrls.live_details);
+      }
+    });
+  }
+
+  // Navigate to Video -> Details
+  if (btnGoVideoDetails) {
+    btnGoVideoDetails.addEventListener('click', () => {
+      if (currentReportUrls?.video_details) {
+        navigateActiveTab(currentReportUrls.video_details);
+      }
+    });
+  }
 
   // Listen for storage changes in real time
   chrome.storage.onChanged.addListener((changes, namespace) => {

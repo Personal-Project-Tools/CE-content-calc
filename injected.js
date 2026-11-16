@@ -32,6 +32,13 @@
       // Format requirement: country.TTK.seller
       const formattedSellerId = `${country}.TTK.${seller}`;
 
+      // Build seller-specific analytics report page URLs (Step 1 of report collection workflow)
+      const origin = window.location.origin;
+      const reportUrls = {
+        live_details: `${origin}/compass/live-analysis/live-details?shop_region=${encodeURIComponent(country)}`,
+        video_details: `${origin}/compass/video-analytics/video-details?platform_data_source=shop&shop_region=${encodeURIComponent(country)}`
+      };
+
       parsedShops.push({
         formatted_seller_id: formattedSellerId,
         seller: seller,
@@ -42,6 +49,7 @@
         operation_mode: sellerInfo.operation_mode || '',
         status: globalSeller.status ?? null,
         seller_type: globalSeller.seller_type ?? null,
+        report_urls: reportUrls,
         raw_seller_info: sellerInfo
       });
     }
