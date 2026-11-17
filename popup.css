@@ -467,6 +467,53 @@ body {
   color: var(--text-muted);
 }
 
+.checklist-item[data-status="running"] .check-dot {
+  background-color: var(--accent-yellow);
+  box-shadow: 0 0 6px var(--accent-yellow);
+}
+.checklist-item[data-status="running"] .check-status {
+  color: var(--accent-yellow);
+}
+
+.checklist-item[data-status="done"] .check-dot {
+  background-color: var(--accent-green);
+  box-shadow: 0 0 6px var(--accent-green);
+}
+.checklist-item[data-status="done"] .check-status {
+  color: var(--accent-green);
+}
+
+.checklist-item[data-status="empty"] .check-dot {
+  background-color: var(--accent-blue);
+}
+.checklist-item[data-status="empty"] .check-status {
+  color: var(--accent-blue);
+}
+
+.checklist-item[data-status="error"] .check-dot {
+  background-color: #ef4444;
+}
+.checklist-item[data-status="error"] .check-status {
+  color: #ef4444;
+}
+
+.workflow-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.btn-full {
+  width: 100%;
+  justify-content: center;
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .routes-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;

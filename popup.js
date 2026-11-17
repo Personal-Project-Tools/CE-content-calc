@@ -114,9 +114,50 @@ document.addEventListener('DOMContentLoaded', () => {
   const fieldMonthWrapper = document.getElementById('field-month-wrapper');
   const inputSingleDate = document.getElementById('input-single-date');
   const inputTargetMonth = document.getElementById('input-target-month');
+  const btnRunAllReports = document.getElementById('btn-run-all-reports');
+  const btnRunCurrentPage = document.getElementById('btn-run-current-page');
 
   let currentReportUrls = null;
   let currentPeriodMode = 'day'; // 'day' | 'month'
+
+  function getPeriodConfigFromInputs() {
+    return {
+      mode: currentPeriodMode,
+      date: inputSingleDate?.value || getDefaultYesterdayStr(),
+      month: inputTargetMonth?.value || getDefaultPreviousMonthStr()
+    };
+  }
+
+  function renderChecklistStatuses(statuses = {}, isRunning = false) {
+    const items = document.querySelectorAll('#report-checklist .checklist-item');
+    items.forEach((item) => {
+      const key = item.getAttribute('data-report');
+      const info = statuses[key];
+      const statusSpan = item.querySelector('.check-status');
+      if (!info) {
+        item.removeAttribute('data-status');
+        if (statusSpan) statusSpan.textContent = 'Pending';
+        return;
+      }
+      item.setAttribute('data-status', info.status || 'pending');
+      if (statusSpan) {
+        statusSpan.textContent = info.message || info.status || 'Pending';
+      }
+    });
+
+    if (btnRunAllReports) {
+      btnRunAllReports.disabled = Boolean(isRunning);
+      btnRunAllReports.textContent = isRunning
+        ? '⏳ Running Auto Export...'
+        : '▶ Auto Export All 4 Reports';
+    }
+  }
+
+  function loadChecklistStatuses() {
+    chrome.storage.local.get(['ttk_report_statuses', 'ttk_workflow_running'], (res) => {
+      renderChecklistStatuses(res.ttk_report_statuses || {}, res.ttk_workflow_running);
+    });
+  }
 
   function getDefaultYesterdayStr() {
     const d = new Date();
@@ -198,6 +239,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (inputSingleDate) inputSingleDate.addEventListener('change', savePeriodConfig);
   if (inputTargetMonth) inputTargetMonth.addEventListener('change', savePeriodConfig);
   loadStoredPeriodConfig();
+  loadChecklistStatuses();
 
   function buildFallbackReportUrls(country, tabUrl) {
     const region = (country || 'SG').toUpperCase();
@@ -339,10 +381,65 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // Run Full 4-Report Auto Export Workflow (LIVE Details -> Video Details)
+  if (btnRunAllReports) {
+    btnRunAllReports.addEventListener('click', () => {
+      if (!currentReportUrls) return;
+      savePeriodConfig();
+      const periodConfig = getPeriodConfigFromInputs();
+
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        const activeTab = tabs[0];
+        if (!activeTab?.id) return;
+
+        chrome.runtime.sendMessage({
+          action: 'START_FULL_WORKFLOW',
+          tabId: activeTab.id,
+          reportUrls: currentReportUrls,
+          periodConfig
+        });
+      });
+    });
+  }
+
+  // Run Workflow on Current Open Details Page Only (2 Reports)
+  if (btnRunCurrentPage) {
+    btnRunCurrentPage.addEventListener('click', () => {
+      savePeriodConfig();
+      const periodConfig = getPeriodConfigFromInputs();
+
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        const activeTab = tabs[0];
+        if (!activeTab?.id) return;
+
+        btnRunCurrentPage.disabled = true;
+        btnRunCurrentPage.textContent = '⏳ Running Current Page...';
+
+        chrome.tabs.sendMessage(
+          activeTab.id,
+          {
+            action: 'RUN_PAGE_WORKFLOW',
+            periodConfig
+          },
+          () => {
+            btnRunCurrentPage.disabled = false;
+            btnRunCurrentPage.textContent = 'Run Current Page Only (2 Reports)';
+            loadChecklistStatuses();
+          }
+        );
+      });
+    });
+  }
+
   // Listen for storage changes in real time
   chrome.storage.onChanged.addListener((changes, namespace) => {
-    if (namespace === 'local' && changes.ttk_seller_payload) {
-      loadStoredData();
+    if (namespace === 'local') {
+      if (changes.ttk_seller_payload) {
+        loadStoredData();
+      }
+      if (changes.ttk_report_statuses || changes.ttk_workflow_running) {
+        loadChecklistStatuses();
+      }
     }
   });
 });

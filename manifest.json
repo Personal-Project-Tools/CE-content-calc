@@ -5,7 +5,8 @@
   "description": "Automatically detect shop, standardize Seller ID (country.TTK.seller), and prepare analytics reports on TikTok Shop.",
   "permissions": [
     "storage",
-    "activeTab"
+    "activeTab",
+    "downloads"
   ],
   "host_permissions": [
     "https://*.tiktok.com/*",
