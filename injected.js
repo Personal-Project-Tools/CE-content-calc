@@ -10,7 +10,92 @@
   }
 
   const TARGET_ENDPOINT = '/api/v1/seller/workbench/get_all_sellers';
+  const API_INCLUDE_KEYWORDS = [
+    'export',
+    'insights',
+    'compass',
+    'live',
+    'video',
+    'report',
+    'list',
+    'task',
+    'download'
+  ];
+  const API_IGNORE_KEYWORDS = [
+    'batch',
+    'newest_reply',
+    'tooltips',
+    'get_config',
+    'abtest_config',
+    'browser-settings',
+    'collect',
+    'get_all_sellers'
+  ];
+
   let lastCapturedPayload = null;
+
+  function shouldCaptureApi(url) {
+    if (!url || typeof url !== 'string') return false;
+    const lower = url.toLowerCase();
+    if (!lower.includes('/api/')) return false;
+    if (API_IGNORE_KEYWORDS.some((kw) => lower.includes(kw))) return false;
+    return API_INCLUDE_KEYWORDS.some((kw) => lower.includes(kw));
+  }
+
+  function serializeRequestBody(rawBody) {
+    if (rawBody == null) return null;
+    if (typeof rawBody === 'string') {
+      try {
+        return JSON.parse(rawBody);
+      } catch {
+        return rawBody.slice(0, 4000);
+      }
+    }
+    if (rawBody instanceof URLSearchParams) {
+      return rawBody.toString();
+    }
+    if (typeof FormData !== 'undefined' && rawBody instanceof FormData) {
+      const obj = {};
+      rawBody.forEach((val, key) => {
+        obj[key] = typeof val === 'string' ? val : '[File]';
+      });
+      return obj;
+    }
+    return String(rawBody).slice(0, 4000);
+  }
+
+  function truncateResponsePayload(data) {
+    try {
+      const serialized = JSON.stringify(data);
+      if (!serialized) return data;
+      if (serialized.length <= 4000) return data;
+      return {
+        _truncated: true,
+        length: serialized.length,
+        preview: serialized.slice(0, 4000)
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function dispatchCapturedApi({ transport, method, url, requestBody, status, response }) {
+    const entry = {
+      transport,
+      method: (method || 'GET').toUpperCase(),
+      url,
+      requestBody: serializeRequestBody(requestBody),
+      status: status ?? null,
+      response: truncateResponsePayload(response),
+      timestamp: Date.now()
+    };
+
+    window.dispatchEvent(
+      new CustomEvent('TIKTOK_API_CAPTURED', {
+        detail: entry
+      })
+    );
+  }
 
   function parseSellerData(data, requestUrl) {
     if (!data || typeof data !== 'object') return null;
@@ -83,9 +168,12 @@
   if (typeof window.fetch === 'function') {
     const originalFetch = window.fetch;
     window.fetch = async function (...args) {
+      const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
+      const method = (args[1]?.method || (typeof Request !== 'undefined' && args[0] instanceof Request ? args[0].method : 'GET') || 'GET').toUpperCase();
+      const requestBody = args[1]?.body ?? null;
+
       const response = await originalFetch.apply(this, args);
       try {
-        const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
         if (url && url.includes(TARGET_ENDPOINT)) {
           const clone = response.clone();
           clone.json().then(jsonData => {
@@ -94,6 +182,41 @@
           }).catch(err => {
             console.debug('[TikTok Extension] JSON parse error in fetch clone:', err);
           });
+        } else if (shouldCaptureApi(url)) {
+          const clone = response.clone();
+          const contentType = clone.headers.get('content-type') || '';
+          const status = clone.status;
+          if (contentType.includes('application/json') || contentType.includes('text/')) {
+            clone.text().then(text => {
+              let parsed = text;
+              try {
+                parsed = JSON.parse(text);
+              } catch {
+                parsed = text.slice(0, 2000);
+              }
+              dispatchCapturedApi({
+                transport: 'fetch',
+                method,
+                url,
+                requestBody,
+                status,
+                response: parsed
+              });
+            }).catch(() => {});
+          } else {
+            dispatchCapturedApi({
+              transport: 'fetch',
+              method,
+              url,
+              requestBody,
+              status,
+              response: {
+                _binary: true,
+                contentType,
+                contentDisposition: clone.headers.get('content-disposition') || ''
+              }
+            });
+          }
         }
       } catch (err) {
         console.debug('[TikTok Extension] Error in fetch hook:', err);
@@ -108,23 +231,44 @@
     const origSend = XMLHttpRequest.prototype.send;
 
     XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+      this.__reqMethod = (method || 'GET').toUpperCase();
       this.__reqUrl = typeof url === 'string' ? url : (url ? url.toString() : '');
       return origOpen.call(this, method, url, ...rest);
     };
 
-    XMLHttpRequest.prototype.send = function (...args) {
+    XMLHttpRequest.prototype.send = function (body, ...rest) {
+      this.__reqBody = body ?? null;
       this.addEventListener('load', function () {
         try {
           if (this.__reqUrl && this.__reqUrl.includes(TARGET_ENDPOINT)) {
             const jsonData = JSON.parse(this.responseText);
             const payload = parseSellerData(jsonData, this.__reqUrl);
             if (payload) dispatchSellerData(payload);
+          } else if (shouldCaptureApi(this.__reqUrl)) {
+            let parsedResponse = null;
+            if (!this.responseType || this.responseType === 'text') {
+              try {
+                parsedResponse = JSON.parse(this.responseText);
+              } catch {
+                parsedResponse = String(this.responseText || '').slice(0, 2000);
+              }
+            } else {
+              parsedResponse = { _responseType: this.responseType };
+            }
+            dispatchCapturedApi({
+              transport: 'xhr',
+              method: this.__reqMethod,
+              url: this.__reqUrl,
+              requestBody: this.__reqBody,
+              status: this.status,
+              response: parsedResponse
+            });
           }
         } catch (e) {
           // not JSON or not target response
         }
       });
-      return origSend.apply(this, args);
+      return origSend.call(this, body, ...rest);
     };
   }
 
@@ -146,6 +290,5 @@
     }
   });
 
-  console.log('[TikTok Extension] Injected Hook (MAIN world) listening for get_all_sellers API.');
+  console.log('[TikTok Extension] Injected Hook (MAIN world) listening for get_all_sellers & analytics APIs.');
 })();
-

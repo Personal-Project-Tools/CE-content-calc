@@ -370,6 +370,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const activeTab = tabs[0];
       if (activeTab?.id) {
         chrome.tabs.sendMessage(activeTab.id, { action: 'REFRESH_SELLER_DATA' }, () => {
+          void chrome.runtime.lastError;
           setTimeout(loadStoredData, 300);
         });
       }
@@ -379,6 +380,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Clear data
   btnClear.addEventListener('click', () => {
     chrome.runtime.sendMessage({ action: 'CLEAR_SELLER_DATA' }, () => {
+      void chrome.runtime.lastError;
       showEmptyState();
     });
   });
@@ -417,12 +419,17 @@ document.addEventListener('DOMContentLoaded', () => {
         const activeTab = tabs[0];
         if (!activeTab?.id) return;
 
-        chrome.runtime.sendMessage({
-          action: 'START_FULL_WORKFLOW',
-          tabId: activeTab.id,
-          reportUrls: currentReportUrls,
-          periodConfig
-        });
+        chrome.runtime.sendMessage(
+          {
+            action: 'START_FULL_WORKFLOW',
+            tabId: activeTab.id,
+            reportUrls: currentReportUrls,
+            periodConfig
+          },
+          () => {
+            void chrome.runtime.lastError;
+          }
+        );
       });
     });
   }

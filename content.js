@@ -20,6 +20,9 @@
   const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   let isWorkflowRunning = false;
   let lastDownloadTimestamp = 0;
+  let activeCaptureReportKey = null;
+  let sessionCapturedApis = [];
+  let captureWriteChain = Promise.resolve();
 
   // Remove legacy on-page toast if present
   const existingToast = document.getElementById('ttk-ext-toast');
@@ -564,47 +567,52 @@
       return { status: 'empty' };
     }
 
-    // Attempt #1: Click Export button
-    const clickTime1 = Date.now();
-    logStep(`[${reportKey}] Clicking Export button (Attempt #1)...`);
-    updateReportStatus(reportKey, 'running', 'Exporting...');
-    await notifyExpectedDownload(reportKey, periodConfig);
-    triggerExportButtonClick(exportBtn);
-
-    const downloadedOnFirstTry = await waitForDownloadSince(clickTime1, 4500);
-    if (downloadedOnFirstTry) {
-      logStep(`[${reportKey}] Download started on Attempt #1!`);
-      updateReportStatus(reportKey, 'done', 'Downloaded ✓');
-      await sleep(1000);
-      return { status: 'done', attempts: 1 };
-    }
-
-    if (hasNoAvailableData()) {
-      updateReportStatus(reportKey, 'empty', 'No data');
-      return { status: 'empty' };
-    }
-
-    // Attempt #2 (Platform fallback when 1st click on Export doesn't trigger download)
-    const retryBtn = findExportButton();
-    if (retryBtn && !retryBtn.disabled) {
-      const clickTime2 = Date.now();
-      logStep(`[${reportKey}] No download after 4.5s -> Clicking Export (Attempt #2)...`);
-      updateReportStatus(reportKey, 'running', 'Retry click...');
+    try {
+      // Attempt #1: Click Export button
+      const clickTime1 = Date.now();
+      activeCaptureReportKey = reportKey;
+      logStep(`[${reportKey}] Clicking Export button (Attempt #1)...`);
+      updateReportStatus(reportKey, 'running', 'Exporting...');
       await notifyExpectedDownload(reportKey, periodConfig);
-      triggerExportButtonClick(retryBtn);
+      triggerExportButtonClick(exportBtn);
 
-      const downloadedOnSecondTry = await waitForDownloadSince(clickTime2, 5500);
-      if (downloadedOnSecondTry) {
-        logStep(`[${reportKey}] Download started on Attempt #2!`);
+      const downloadedOnFirstTry = await waitForDownloadSince(clickTime1, 4500);
+      if (downloadedOnFirstTry) {
+        logStep(`[${reportKey}] Download started on Attempt #1!`);
         updateReportStatus(reportKey, 'done', 'Downloaded ✓');
         await sleep(1000);
-        return { status: 'done', attempts: 2 };
+        return { status: 'done', attempts: 1 };
       }
-    }
 
-    logStep(`[${reportKey}] Export clicked (check browser download prompt if Save As is enabled).`);
-    updateReportStatus(reportKey, 'done', 'Clicked ✓');
-    return { status: 'done', attempts: 2 };
+      if (hasNoAvailableData()) {
+        updateReportStatus(reportKey, 'empty', 'No data');
+        return { status: 'empty' };
+      }
+
+      // Attempt #2 (Platform fallback when 1st click on Export doesn't trigger download)
+      const retryBtn = findExportButton();
+      if (retryBtn && !retryBtn.disabled) {
+        const clickTime2 = Date.now();
+        logStep(`[${reportKey}] No download after 4.5s -> Clicking Export (Attempt #2)...`);
+        updateReportStatus(reportKey, 'running', 'Retry click...');
+        await notifyExpectedDownload(reportKey, periodConfig);
+        triggerExportButtonClick(retryBtn);
+
+        const downloadedOnSecondTry = await waitForDownloadSince(clickTime2, 5500);
+        if (downloadedOnSecondTry) {
+          logStep(`[${reportKey}] Download started on Attempt #2!`);
+          updateReportStatus(reportKey, 'done', 'Downloaded ✓');
+          await sleep(1000);
+          return { status: 'done', attempts: 2 };
+        }
+      }
+
+      logStep(`[${reportKey}] Export clicked (check browser download prompt if Save As is enabled).`);
+      updateReportStatus(reportKey, 'done', 'Clicked ✓');
+      return { status: 'done', attempts: 2 };
+    } finally {
+      activeCaptureReportKey = null;
+    }
   }
 
   // --- Main Page Workflow (LIVE Details or Video Details) ---
@@ -662,6 +670,9 @@
       // 5. Export Report #2 (Affiliate accounts)
       const affiliateResult = await exportCurrentTabReport(affiliateKey, periodConfig);
 
+      // Save captured API calls directly via page Blob download -> Reports/{seller_id}_{period}/api_capture_log.json
+      await downloadCapturedApisBlob(periodConfig);
+
       logStep(`Finished ${pageType.toUpperCase()} Details page workflow!`);
       return {
         ok: true,
@@ -677,11 +688,91 @@
       updateReportStatus(linkedKey, 'error', 'Failed');
       return { ok: false, error: err.message || String(err) };
     } finally {
+      activeCaptureReportKey = null;
       isWorkflowRunning = false;
     }
   }
 
+  async function downloadCapturedApisBlob(periodConfig) {
+    try {
+      await Promise.race([captureWriteChain, sleep(600)]);
+      const stored = await Promise.race([
+        new Promise((resolve) => {
+          chrome.storage.local.get(['ttk_captured_apis'], (res) => resolve(res || {}));
+        }),
+        sleep(400)
+      ]);
+      const storedLogs = Array.isArray(stored?.ttk_captured_apis) ? stored.ttk_captured_apis : [];
+
+      const seen = new Set();
+      const combined = [];
+      for (const item of [...storedLogs, ...sessionCapturedApis]) {
+        const key = `${item.timestamp}|${item.method}|${item.url}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          combined.push(item);
+        }
+      }
+
+      if (combined.length === 0) return;
+
+      await notifyExpectedDownload(null, periodConfig);
+
+      const blob = new Blob([JSON.stringify(combined.slice(-80), null, 2)], {
+        type: 'application/json'
+      });
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = 'api_capture_log.json';
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+
+      setTimeout(() => {
+        URL.revokeObjectURL(blobUrl);
+      }, 3000);
+
+      await sleep(500);
+    } catch (err) {
+      console.debug('[TikTok Extension] Failed to export api_capture_log.json:', err);
+    }
+  }
+
   // --- Event & Message Listeners ---
+
+  window.addEventListener('TIKTOK_API_CAPTURED', (event) => {
+    const rawEntry = event.detail;
+    if (!rawEntry || !rawEntry.url) return;
+
+    const entry = {
+      ...rawEntry,
+      reportKey: activeCaptureReportKey,
+      pageType: getPageReportType(),
+      pageUrl: window.location.href
+    };
+
+    sessionCapturedApis.push(entry);
+    if (sessionCapturedApis.length > 80) {
+      sessionCapturedApis = sessionCapturedApis.slice(-80);
+    }
+
+    captureWriteChain = captureWriteChain.then(
+      () =>
+        new Promise((resolve) => {
+          try {
+            chrome.storage.local.get(['ttk_captured_apis'], (res) => {
+              const existing = Array.isArray(res?.ttk_captured_apis) ? res.ttk_captured_apis : [];
+              const merged = [...existing, entry].slice(-80);
+              chrome.storage.local.set({ ttk_captured_apis: merged }, () => resolve());
+            });
+          } catch {
+            resolve();
+          }
+        })
+    );
+  });
 
   window.addEventListener('TIKTOK_SELLER_CAPTURED', (event) => {
     const payload = event.detail;
