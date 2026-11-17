@@ -626,6 +626,9 @@
 
   async function selectCalendarPeriod(periodConfig, pageType) {
     const mode = periodConfig?.mode || 'day';
+    const reportTypeLabel = pageType === 'video' ? 'Content Video' : 'Content LIVE';
+    const buildMissingReportError = (label) =>
+      new Error(`Platform do not have ${reportTypeLabel} report for ${label}`);
 
     if (mode === 'month') {
       const popup = await openDatePickerPopup();
@@ -640,7 +643,7 @@
       if (!isNaN(targetYear)) {
         const reached = await navigateCalendarHeader(targetYear, null);
         if (!reached) {
-          throw new Error(`Platform do not have data for ${targetMonthLabel}`);
+          throw buildMissingReportError(targetMonthLabel);
         }
       }
 
@@ -650,7 +653,7 @@
       }, 2500, 100);
 
       if (!monthState || !monthState.found || monthState.disabled) {
-        throw new Error(`Platform do not have data for ${targetMonthLabel}`);
+        throw buildMissingReportError(targetMonthLabel);
       }
 
       logStep(`Clicking month "${monthName}"...`);
@@ -663,7 +666,7 @@
         100
       );
       if (!monthVerified) {
-        throw new Error(`Platform do not have data for ${targetMonthLabel}`);
+        throw buildMissingReportError(targetMonthLabel);
       }
       await sleep(300);
     } else {
@@ -674,7 +677,7 @@
       const targetDay = parseInt(ddStr, 10);
 
       if (isNaN(targetYear) || isNaN(targetMonth) || isNaN(targetDay)) {
-        throw new Error(`Platform do not have data for ${targetDateLabel}`);
+        throw buildMissingReportError(targetDateLabel);
       }
 
       const containerBefore = document.getElementById('page-title-datepicker');
@@ -697,7 +700,7 @@
 
       const reached = await navigateCalendarHeader(targetYear, targetMonth);
       if (!reached) {
-        throw new Error(`Platform do not have data for ${targetDateLabel}`);
+        throw buildMissingReportError(targetDateLabel);
       }
 
       const dayState1 = await waitForSelector(() => {
@@ -706,7 +709,7 @@
       }, 2500, 100);
 
       if (!dayState1 || !dayState1.found || dayState1.disabled) {
-        throw new Error(`Platform do not have data for ${targetDateLabel}`);
+        throw buildMissingReportError(targetDateLabel);
       }
 
       logStep(`Click #1 on day ${targetDay}...`);
@@ -720,7 +723,7 @@
           return s.found ? s : null;
         }, 2000, 100);
         if (!dayState2 || !dayState2.found || dayState2.disabled) {
-          throw new Error(`Platform do not have data for ${targetDateLabel}`);
+          throw buildMissingReportError(targetDateLabel);
         }
         logStep(`Click #2 on day ${targetDay} (Video range end)...`);
         humanClick(dayState2.element);
@@ -732,7 +735,7 @@
         100
       );
       if (!verified) {
-        throw new Error(`Platform do not have data for ${targetDateLabel}`);
+        throw buildMissingReportError(targetDateLabel);
       }
       await sleep(300);
     }
