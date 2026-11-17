@@ -160,8 +160,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btnRunAllReports) {
       btnRunAllReports.disabled = Boolean(isRunning);
       btnRunAllReports.textContent = isRunning
-        ? '⏳ Running Auto Export...'
-        : '▶ Auto Export All 4 Reports';
+        ? '⏳ Exporting in Background...'
+        : '▶ Auto Export All 4 Reports (Background)';
     }
   }
 
@@ -418,6 +418,8 @@ document.addEventListener('DOMContentLoaded', () => {
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         const activeTab = tabs[0];
         if (!activeTab?.id) return;
+
+        renderWorkflowLog({ text: 'Starting silent background export...', isError: false });
 
         chrome.runtime.sendMessage(
           {

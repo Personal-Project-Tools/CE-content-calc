@@ -26,7 +26,6 @@ const TIKTOK_FILENAME_PATTERNS = ['live analysis', 'video performance'];
 let cachedSellerPayload = null;
 let cachedPeriodConfig = null;
 let cachedExpectedDownload = null;
-let capturedApiLogs = [];
 let cacheHydrated = false;
 let hydratePromise = null;
 
@@ -34,29 +33,17 @@ function hydrateCaches() {
   if (hydratePromise) return hydratePromise;
   hydratePromise = new Promise((resolve) => {
     chrome.storage.local.get(
-      ['ttk_seller_payload', 'ttk_period_config', 'ttk_expected_download', 'ttk_captured_apis'],
+      ['ttk_seller_payload', 'ttk_period_config', 'ttk_expected_download'],
       (res) => {
         if (res.ttk_seller_payload) cachedSellerPayload = res.ttk_seller_payload;
         if (res.ttk_period_config) cachedPeriodConfig = res.ttk_period_config;
         if (res.ttk_expected_download) cachedExpectedDownload = res.ttk_expected_download;
-        if (Array.isArray(res.ttk_captured_apis)) {
-          capturedApiLogs = [...res.ttk_captured_apis, ...capturedApiLogs].slice(-60);
-        }
         cacheHydrated = true;
         resolve();
       }
     );
   });
   return hydratePromise;
-}
-
-function utf8ToBase64(str) {
-  const bytes = new TextEncoder().encode(str);
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
 }
 
 hydrateCaches();
@@ -142,20 +129,6 @@ function getSellerAndPeriodFolder() {
 }
 
 function resolveDownloadSuggestion(downloadItem, suggest) {
-  if ((downloadItem.url || '').startsWith('data:application/json')) {
-    suggest({ filename: 'CE-Reports/_api_capture_log.json', conflictAction: 'overwrite' });
-    return;
-  }
-
-  if ((downloadItem.filename || '').includes('api_capture_log')) {
-    const { sellerId, periodLabel } = getSellerAndPeriodFolder();
-    suggest({
-      filename: `CE-Reports/${sellerId}_${periodLabel}/api_capture_log.json`,
-      conflictAction: 'overwrite'
-    });
-    return;
-  }
-
   if (!isTikTokReportDownload(downloadItem)) {
     suggest();
     return;
@@ -188,12 +161,6 @@ if (chrome.downloads && chrome.downloads.onDeterminingFilename) {
 // Notify active Seller Center tabs whenever Chrome starts a download (used for smart Export retry)
 if (chrome.downloads && chrome.downloads.onCreated) {
   chrome.downloads.onCreated.addListener((downloadItem) => {
-    if (
-      (downloadItem.url || '').startsWith('data:application/json') ||
-      (downloadItem.filename || '').includes('api_capture_log')
-    ) {
-      return;
-    }
     const now = Date.now();
     chrome.tabs.query({ url: ['https://*.tiktok.com/*', 'https://*.tiktokglobalshop.com/*'] }, (tabs) => {
       for (const tab of tabs) {
@@ -311,9 +278,7 @@ async function sendMessageWithAutoInject(tabId, payload) {
   });
 }
 
-async function navigateAndRunPageWorkflow(tabId, targetUrl, periodConfig) {
-  saveWorkflowLog(`Navigating to ${targetUrl.includes('live-details') ? 'LIVE Details' : 'Video Details'}...`);
-  await chrome.tabs.update(tabId, { url: targetUrl });
+async function waitAndRunPageWorkflow(tabId, periodConfig) {
   await sleep(1500);
   await waitForTabComplete(tabId, 25000);
   // Give React + Arco time to render #page-title-datepicker and table
@@ -325,7 +290,13 @@ async function navigateAndRunPageWorkflow(tabId, targetUrl, periodConfig) {
   });
 }
 
-async function runFullFourReportWorkflow(tabId, reportUrls, periodConfig) {
+async function navigateAndRunPageWorkflow(tabId, targetUrl, periodConfig) {
+  saveWorkflowLog(`Loading ${targetUrl.includes('live-details') ? 'LIVE Details' : 'Video Details'} in background...`);
+  await chrome.tabs.update(tabId, { url: targetUrl });
+  return waitAndRunPageWorkflow(tabId, periodConfig);
+}
+
+async function runFullFourReportWorkflow(sourceTabId, reportUrls, periodConfig) {
   const initialStatuses = {
     live_linked: { status: 'pending', message: 'Queued' },
     live_affiliate: { status: 'pending', message: 'Queued' },
@@ -337,22 +308,58 @@ async function runFullFourReportWorkflow(tabId, reportUrls, periodConfig) {
     ttk_workflow_running: true
   });
 
-  try {
-    // Phase 1: LIVE -> Details (2 reports: Linked + Affiliate)
-    const liveRes = await navigateAndRunPageWorkflow(tabId, reportUrls.live_details, periodConfig);
+  let workerTabId = null;
 
-    await sleep(1500);
+  try {
+    let windowId;
+    if (sourceTabId) {
+      try {
+        const sourceTab = await chrome.tabs.get(sourceTabId);
+        windowId = sourceTab?.windowId;
+      } catch {
+        windowId = undefined;
+      }
+    }
+
+    saveWorkflowLog('Opening silent background tab for LIVE Details...');
+    const createOpts = {
+      url: reportUrls.live_details,
+      active: false,
+      pinned: true
+    };
+    if (typeof windowId === 'number') {
+      createOpts.windowId = windowId;
+    }
+
+    const workerTab = await chrome.tabs.create(createOpts);
+    workerTabId = workerTab?.id || null;
+    if (!workerTabId) {
+      throw new Error('Failed to create background worker tab');
+    }
+
+    // Phase 1: LIVE -> Details (2 reports: Linked + Affiliate)
+    const liveRes = await waitAndRunPageWorkflow(workerTabId, periodConfig);
+
+    await sleep(1200);
 
     // Phase 2: Video -> Details (2 reports: Linked + Affiliate, re-selects Date/Month)
-    const videoRes = await navigateAndRunPageWorkflow(tabId, reportUrls.video_details, periodConfig);
+    const videoRes = await navigateAndRunPageWorkflow(workerTabId, reportUrls.video_details, periodConfig);
 
-    saveWorkflowLog('All 4 report steps finished!');
-    await chrome.storage.local.set({ ttk_workflow_running: false });
+    await sleep(1000);
+    saveWorkflowLog('All 4 background export steps finished!');
     return { ok: true, liveRes, videoRes };
   } catch (err) {
     saveWorkflowLog(err.message || String(err), true);
-    await chrome.storage.local.set({ ttk_workflow_running: false });
     return { ok: false, error: err.message || String(err) };
+  } finally {
+    if (workerTabId) {
+      try {
+        await chrome.tabs.remove(workerTabId);
+      } catch {
+        // Tab may already be closed
+      }
+    }
+    await chrome.storage.local.set({ ttk_workflow_running: false });
   }
 }
 
@@ -435,51 +442,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (message.action === 'RECORD_CAPTURED_API') {
-    hydrateCaches().then(() => {
-      if (message.entry) {
-        capturedApiLogs.push(message.entry);
-        if (capturedApiLogs.length > 60) {
-          capturedApiLogs = capturedApiLogs.slice(-60);
-        }
-        chrome.storage.local.set({ ttk_captured_apis: capturedApiLogs });
-      }
-      sendResponse({ ok: true, count: capturedApiLogs.length });
-    });
-    return true;
-  }
-
-  if (message.action === 'FLUSH_CAPTURED_APIS_TO_FILE') {
-    hydrateCaches().then(() => {
-      try {
-        const jsonStr = JSON.stringify(capturedApiLogs, null, 2);
-        const dataUrl = `data:application/json;charset=utf-8;base64,${utf8ToBase64(jsonStr)}`;
-        chrome.downloads.download(
-          {
-            url: dataUrl,
-            filename: 'CE-Reports/_api_capture_log.json',
-            conflictAction: 'overwrite',
-            saveAs: false
-          },
-          (downloadId) => {
-            if (chrome.runtime.lastError) {
-              sendResponse({ ok: false, error: chrome.runtime.lastError.message });
-            } else {
-              sendResponse({ ok: Boolean(downloadId), count: capturedApiLogs.length });
-            }
-          }
-        );
-      } catch (err) {
-        sendResponse({ ok: false, error: err?.message || String(err) });
-      }
-    });
+  if (message.action === 'BACKGROUND_SLEEP') {
+    const ms = Math.max(0, Math.min(Number(message.ms) || 0, 30000));
+    setTimeout(() => {
+      sendResponse({ ok: true });
+    }, ms);
     return true;
   }
 
   if (message.action === 'CLEAR_SELLER_DATA') {
     cachedSellerPayload = null;
     cachedExpectedDownload = null;
-    capturedApiLogs = [];
     chrome.storage.local.remove(
       [
         'ttk_seller_payload',
