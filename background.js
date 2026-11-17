@@ -1,12 +1,148 @@
 /**
  * Background Service Worker (Manifest V3)
- * Manages seller state, monitors Chrome report downloads, and orchestrates the 4-report workflow
- * across LIVE -> Details and Video -> Details pages.
+ * Manages seller state, monitors Chrome report downloads, routes TikTok reports to CE-Reports/,
+ * and orchestrates the 4-report workflow across LIVE -> Details and Video -> Details pages.
  */
+
+const REPORT_PREFIX_MAP = {
+  live_linked: '1_LIVE_Linked',
+  live_affiliate: '2_LIVE_Affiliate',
+  video_linked: '3_Video_Linked',
+  video_affiliate: '4_Video_Affiliate'
+};
+
+const EXPECTED_DOWNLOAD_TTL_MS = 60000;
+const TIKTOK_DOMAIN_KEYWORDS = ['tiktok', 'oecstatic', 'byted', 'compass'];
+
+let cachedSellerPayload = null;
+let cachedPeriodConfig = null;
+let cachedExpectedDownload = null;
+let cacheHydrated = false;
+let hydratePromise = null;
+
+function hydrateCaches() {
+  if (hydratePromise) return hydratePromise;
+  hydratePromise = new Promise((resolve) => {
+    chrome.storage.local.get(
+      ['ttk_seller_payload', 'ttk_period_config', 'ttk_expected_download'],
+      (res) => {
+        if (res.ttk_seller_payload) cachedSellerPayload = res.ttk_seller_payload;
+        if (res.ttk_period_config) cachedPeriodConfig = res.ttk_period_config;
+        if (res.ttk_expected_download) cachedExpectedDownload = res.ttk_expected_download;
+        cacheHydrated = true;
+        resolve();
+      }
+    );
+  });
+  return hydratePromise;
+}
+
+hydrateCaches();
+
+chrome.storage.onChanged.addListener((changes, namespace) => {
+  if (namespace !== 'local') return;
+  if (changes.ttk_seller_payload) {
+    cachedSellerPayload = changes.ttk_seller_payload.newValue || null;
+  }
+  if (changes.ttk_period_config) {
+    cachedPeriodConfig = changes.ttk_period_config.newValue || null;
+  }
+  if (changes.ttk_expected_download) {
+    cachedExpectedDownload = changes.ttk_expected_download.newValue || null;
+  }
+});
 
 chrome.runtime.onInstalled.addListener(() => {
   console.log('[TikTok Extension] Extension installed successfully.');
+  hydrateCaches();
 });
+
+function sanitizeFilenamePart(value, fallback = 'UNKNOWN') {
+  const cleaned = String(value || '')
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+    .replace(/[. ]+$/g, '')
+    .trim();
+  return cleaned || fallback;
+}
+
+function getTodayLocalDateStr() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function isRecentExpectedDownload() {
+  return Boolean(
+    cachedExpectedDownload &&
+      typeof cachedExpectedDownload.timestamp === 'number' &&
+      Date.now() - cachedExpectedDownload.timestamp <= EXPECTED_DOWNLOAD_TTL_MS
+  );
+}
+
+function isTikTokReportDownload(downloadItem) {
+  if (isRecentExpectedDownload()) {
+    return true;
+  }
+  const haystack = [
+    downloadItem.url || '',
+    downloadItem.finalUrl || '',
+    downloadItem.referrer || '',
+    downloadItem.filename || ''
+  ]
+    .join(' ')
+    .toLowerCase();
+
+  return TIKTOK_DOMAIN_KEYWORDS.some((kw) => haystack.includes(kw));
+}
+
+function resolveDownloadSuggestion(downloadItem, suggest) {
+  if (!isTikTokReportDownload(downloadItem)) {
+    suggest();
+    return;
+  }
+
+  const rawBasename = (downloadItem.filename || '').split(/[\\/]/).pop() || '';
+  const dotIdx = rawBasename.lastIndexOf('.');
+  const ext = dotIdx > 0 ? rawBasename.slice(dotIdx) : '.xlsx';
+  const rawStem = dotIdx > 0 ? rawBasename.slice(0, dotIdx) : rawBasename;
+
+  const activeShop = cachedSellerPayload?.active_shop || cachedSellerPayload?.shops?.[0];
+  const sellerId = sanitizeFilenamePart(activeShop?.formatted_seller_id, 'UNKNOWN_SELLER');
+
+  const recentExpected = isRecentExpectedDownload();
+  const periodCfg = (recentExpected ? cachedExpectedDownload?.periodConfig : null) || cachedPeriodConfig;
+  const rawPeriod = periodCfg
+    ? periodCfg.mode === 'month'
+      ? periodCfg.month
+      : periodCfg.date
+    : '';
+  const periodLabel = sanitizeFilenamePart(rawPeriod, getTodayLocalDateStr());
+
+  const reportKey = recentExpected ? cachedExpectedDownload?.reportKey : null;
+  const reportPrefix =
+    (reportKey && REPORT_PREFIX_MAP[reportKey]) || sanitizeFilenamePart(rawStem, 'report');
+
+  const relativePath = `CE-Reports/${sellerId}_${periodLabel}/${reportPrefix}${ext}`;
+  suggest({ filename: relativePath, conflictAction: 'overwrite' });
+  saveWorkflowLog(`Saved to Reports/${sellerId}_${periodLabel}/${reportPrefix}${ext}`);
+}
+
+// Route TikTok reports through the Downloads/CE-Reports junction into repo Reports/
+if (chrome.downloads && chrome.downloads.onDeterminingFilename) {
+  chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
+    if (cacheHydrated) {
+      resolveDownloadSuggestion(downloadItem, suggest);
+      return false;
+    }
+
+    hydrateCaches().then(() => {
+      resolveDownloadSuggestion(downloadItem, suggest);
+    });
+    return true;
+  });
+}
 
 // Notify active Seller Center tabs whenever Chrome starts a download (used for smart Export retry)
 if (chrome.downloads && chrome.downloads.onCreated) {
@@ -181,6 +317,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
+    cachedSellerPayload = payload;
     chrome.storage.local.set(
       {
         ttk_seller_payload: payload,
@@ -194,6 +331,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ success: true, saved: payload.shops.length });
       }
     );
+    return true;
+  }
+
+  if (message.action === 'SET_EXPECTED_DOWNLOAD') {
+    cachedExpectedDownload = {
+      reportKey: message.reportKey || null,
+      periodConfig: message.periodConfig || null,
+      timestamp: message.timestamp || Date.now()
+    };
+    if (message.periodConfig) {
+      cachedPeriodConfig = message.periodConfig;
+    }
+    chrome.storage.local.set({ ttk_expected_download: cachedExpectedDownload }, () => {
+      sendResponse({ ok: true });
+    });
     return true;
   }
 
@@ -229,8 +381,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === 'CLEAR_SELLER_DATA') {
+    cachedSellerPayload = null;
+    cachedExpectedDownload = null;
     chrome.storage.local.remove(
-      ['ttk_seller_payload', 'ttk_last_updated', 'ttk_report_statuses', 'ttk_workflow_running', 'ttk_workflow_log'],
+      [
+        'ttk_seller_payload',
+        'ttk_last_updated',
+        'ttk_report_statuses',
+        'ttk_workflow_running',
+        'ttk_workflow_log',
+        'ttk_expected_download'
+      ],
       () => {
         chrome.action.setBadgeText({ text: '' });
         sendResponse({ success: true });

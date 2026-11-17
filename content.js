@@ -483,7 +483,44 @@
     return false;
   }
 
-  async function exportCurrentTabReport(reportKey) {
+  async function notifyExpectedDownload(reportKey, periodConfig) {
+    const payload = {
+      reportKey,
+      periodConfig: periodConfig || null,
+      timestamp: Date.now()
+    };
+
+    const storagePromise = new Promise((resolve) => {
+      try {
+        chrome.storage.local.set({ ttk_expected_download: payload }, () => resolve());
+      } catch (e) {
+        resolve();
+      }
+    });
+
+    const msgPromise = new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage(
+          {
+            action: 'SET_EXPECTED_DOWNLOAD',
+            ...payload
+          },
+          () => {
+            if (chrome.runtime.lastError) {
+              // Service worker might be waking up
+            }
+            resolve();
+          }
+        );
+      } catch (e) {
+        resolve();
+      }
+    });
+
+    await Promise.race([Promise.all([storagePromise, msgPromise]), sleep(400)]);
+  }
+
+  async function exportCurrentTabReport(reportKey, periodConfig) {
     updateReportStatus(reportKey, 'running', 'Loading...');
     logStep(`[${reportKey}] Waiting for table data to load...`);
     await waitForDataLoadingComplete();
@@ -515,6 +552,7 @@
     const clickTime1 = Date.now();
     logStep(`[${reportKey}] Clicking Export button (Attempt #1)...`);
     updateReportStatus(reportKey, 'running', 'Exporting...');
+    await notifyExpectedDownload(reportKey, periodConfig);
     triggerExportButtonClick(exportBtn);
 
     const downloadedOnFirstTry = await waitForDownloadSince(clickTime1, 4500);
@@ -536,6 +574,7 @@
       const clickTime2 = Date.now();
       logStep(`[${reportKey}] No download after 4.5s -> Clicking Export (Attempt #2)...`);
       updateReportStatus(reportKey, 'running', 'Retry click...');
+      await notifyExpectedDownload(reportKey, periodConfig);
       triggerExportButtonClick(retryBtn);
 
       const downloadedOnSecondTry = await waitForDownloadSince(clickTime2, 5500);
@@ -589,7 +628,7 @@
       await selectCalendarPeriod(periodConfig, pageType);
 
       // 3. Export Report #1 (Linked accounts)
-      const linkedResult = await exportCurrentTabReport(linkedKey);
+      const linkedResult = await exportCurrentTabReport(linkedKey, periodConfig);
 
       // 4. Switch to "Affiliate accounts" tab (Date Range is preserved on same page!)
       updateReportStatus(affiliateKey, 'running', 'Switching tab...');
@@ -605,7 +644,7 @@
       await sleep(800);
 
       // 5. Export Report #2 (Affiliate accounts)
-      const affiliateResult = await exportCurrentTabReport(affiliateKey);
+      const affiliateResult = await exportCurrentTabReport(affiliateKey, periodConfig);
 
       logStep(`Finished ${pageType.toUpperCase()} Details page workflow!`);
       return {
