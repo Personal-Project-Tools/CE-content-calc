@@ -25,10 +25,10 @@ if not exist "%DOWNLOADS_DIR%" (
 set "JUNCTION_PATH=%DOWNLOADS_DIR%\CE-Reports"
 
 if exist "%JUNCTION_PATH%" (
-    rem Check if existing path is a reparse point (junction/symlink) or real directory
-    powershell -NoProfile -Command "$item = Get-Item -LiteralPath '%JUNCTION_PATH%' -Force; if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { [IO.Directory]::Delete($item.FullName); exit 0 } else { Write-Error 'Existing path is not a junction'; exit 2 }"
+    rem Handle existing junction/reparse point or auto-created regular Downloads\CE-Reports directory
+    powershell -NoProfile -Command "$src = $env:JUNCTION_PATH; $dst = $env:REPORTS_DIR; $item = Get-Item -LiteralPath $src -Force; if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { [IO.Directory]::Delete($item.FullName); exit 0 }; if (-not $item.PSIsContainer) { Write-Error 'Existing path is a file, not a directory.'; exit 2 }; $children = Get-ChildItem -LiteralPath $src -Force; if ($children) { Write-Host ('[INFO] Migrating existing files from ' + $src + ' to ' + $dst + '...'); foreach ($c in $children) { Copy-Item -LiteralPath $c.FullName -Destination $dst -Recurse -Force } }; Remove-Item -LiteralPath $src -Recurse -Force; exit 0"
     if errorlevel 1 (
-        echo [ERROR] "%JUNCTION_PATH%" already exists and is not a junction. Please move or remove it manually.
+        echo [ERROR] Failed to prepare "%JUNCTION_PATH%" for junction creation.
         exit /b 1
     )
 )
