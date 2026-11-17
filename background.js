@@ -12,7 +12,16 @@ const REPORT_PREFIX_MAP = {
 };
 
 const EXPECTED_DOWNLOAD_TTL_MS = 60000;
-const TIKTOK_DOMAIN_KEYWORDS = ['tiktok', 'oecstatic', 'byted', 'compass'];
+const TIKTOK_DOMAIN_KEYWORDS = [
+  'tiktok',
+  'oecstatic',
+  'byted',
+  'byteintl',
+  'ibyte',
+  'ttwstatic',
+  'compass'
+];
+const TIKTOK_FILENAME_PATTERNS = ['live analysis', 'video performance'];
 
 let cachedSellerPayload = null;
 let cachedPeriodConfig = null;
@@ -85,6 +94,11 @@ function isTikTokReportDownload(downloadItem) {
   if (isRecentExpectedDownload()) {
     return true;
   }
+  const filenameLower = (downloadItem.filename || '').toLowerCase();
+  if (TIKTOK_FILENAME_PATTERNS.some((pat) => filenameLower.includes(pat))) {
+    return true;
+  }
+
   const haystack = [
     downloadItem.url || '',
     downloadItem.finalUrl || '',
@@ -109,7 +123,8 @@ function resolveDownloadSuggestion(downloadItem, suggest) {
   const rawStem = dotIdx > 0 ? rawBasename.slice(0, dotIdx) : rawBasename;
 
   const activeShop = cachedSellerPayload?.active_shop || cachedSellerPayload?.shops?.[0];
-  const sellerId = sanitizeFilenamePart(activeShop?.formatted_seller_id, 'UNKNOWN_SELLER');
+  const rawSellerId = cachedExpectedDownload?.sellerId || activeShop?.formatted_seller_id;
+  const sellerId = sanitizeFilenamePart(rawSellerId, 'UNKNOWN_SELLER');
 
   const recentExpected = isRecentExpectedDownload();
   const periodCfg = (recentExpected ? cachedExpectedDownload?.periodConfig : null) || cachedPeriodConfig;
@@ -130,17 +145,10 @@ function resolveDownloadSuggestion(downloadItem, suggest) {
 }
 
 // Route TikTok reports through the Downloads/CE-Reports junction into repo Reports/
+// Must call suggest() synchronously in MV3 service workers so Chromium applies the override reliably.
 if (chrome.downloads && chrome.downloads.onDeterminingFilename) {
   chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
-    if (cacheHydrated) {
-      resolveDownloadSuggestion(downloadItem, suggest);
-      return false;
-    }
-
-    hydrateCaches().then(() => {
-      resolveDownloadSuggestion(downloadItem, suggest);
-    });
-    return true;
+    resolveDownloadSuggestion(downloadItem, suggest);
   });
 }
 
@@ -334,8 +342,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === 'CHECK_BACKGROUND_READY') {
+    sendResponse({
+      ok: true,
+      hasDownloadsOnDetermining: Boolean(chrome.downloads && chrome.downloads.onDeterminingFilename)
+    });
+    return false;
+  }
+
   if (message.action === 'SET_EXPECTED_DOWNLOAD') {
     cachedExpectedDownload = {
+      sellerId: message.sellerId || null,
       reportKey: message.reportKey || null,
       periodConfig: message.periodConfig || null,
       timestamp: message.timestamp || Date.now()
@@ -343,10 +360,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.periodConfig) {
       cachedPeriodConfig = message.periodConfig;
     }
-    chrome.storage.local.set({ ttk_expected_download: cachedExpectedDownload }, () => {
-      sendResponse({ ok: true });
-    });
-    return true;
+    chrome.storage.local.set({ ttk_expected_download: cachedExpectedDownload });
+    sendResponse({ ok: true, routedFolder: 'CE-Reports' });
+    return false;
   }
 
   if (message.action === 'UPDATE_REPORT_STATUS') {

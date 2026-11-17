@@ -484,7 +484,23 @@
   }
 
   async function notifyExpectedDownload(reportKey, periodConfig) {
+    let sellerId = null;
+    try {
+      const stored = await Promise.race([
+        new Promise((resolve) => {
+          chrome.storage.local.get(['ttk_seller_payload'], (res) => resolve(res || {}));
+        }),
+        sleep(300)
+      ]);
+      const sellerPayload = stored?.ttk_seller_payload;
+      const activeShop = sellerPayload?.active_shop || sellerPayload?.shops?.[0];
+      sellerId = activeShop?.formatted_seller_id || null;
+    } catch (e) {
+      sellerId = null;
+    }
+
     const payload = {
+      sellerId,
       reportKey,
       periodConfig: periodConfig || null,
       timestamp: Date.now()
@@ -517,7 +533,7 @@
       }
     });
 
-    await Promise.race([Promise.all([storagePromise, msgPromise]), sleep(400)]);
+    await Promise.race([Promise.all([storagePromise, msgPromise]), sleep(1000)]);
   }
 
   async function exportCurrentTabReport(reportKey, periodConfig) {

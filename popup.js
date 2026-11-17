@@ -256,6 +256,16 @@ document.addEventListener('DOMContentLoaded', () => {
   loadStoredPeriodConfig();
   loadChecklistStatuses();
 
+  // Verify background service worker is up-to-date and downloads.onDeterminingFilename is active
+  chrome.runtime.sendMessage({ action: 'CHECK_BACKGROUND_READY' }, (res) => {
+    if (chrome.runtime.lastError || !res || !res.ok || !res.hasDownloadsOnDetermining) {
+      renderWorkflowLog({
+        text: '⚠️ Please click Reload (🔄) on chrome://extensions to activate Reports/ folder routing.',
+        isError: true
+      });
+    }
+  });
+
   function buildFallbackReportUrls(country, tabUrl) {
     const region = (country || 'SG').toUpperCase();
     let origin = `https://seller-${region.toLowerCase()}.tiktok.com`;
