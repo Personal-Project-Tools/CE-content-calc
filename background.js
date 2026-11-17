@@ -345,7 +345,7 @@ async function runFullFourReportWorkflow(sourceTabId, reportUrls, periodConfig) 
     // Phase 2: Video -> Details (2 reports: Linked + Affiliate, re-selects Date/Month)
     const videoRes = await navigateAndRunPageWorkflow(workerTabId, reportUrls.video_details, periodConfig);
 
-    await sleep(1000);
+    await sleep(3000);
     saveWorkflowLog('All 4 background export steps finished!');
     return { ok: true, liveRes, videoRes };
   } catch (err) {

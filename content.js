@@ -20,6 +20,7 @@
   const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   let isWorkflowRunning = false;
   let lastDownloadTimestamp = 0;
+  let lastExportTaskCreatedTimestamp = 0;
 
   // Remove legacy on-page toast if present
   const existingToast = document.getElementById('ttk-ext-toast');
@@ -505,6 +506,33 @@
     return false;
   }
 
+  async function waitForDownloadOrTaskSince(timestampMs, waitMs = 4500) {
+    const start = Date.now();
+    while (Date.now() - start < waitMs) {
+      if (lastDownloadTimestamp >= timestampMs) {
+        return 'download';
+      }
+      if (lastExportTaskCreatedTimestamp >= timestampMs) {
+        return 'task';
+      }
+      await sleep(250);
+    }
+    return null;
+  }
+
+  async function waitForExportAttempt(clickTime, attemptNum, reportKey, initialWaitMs) {
+    const outcome = await waitForDownloadOrTaskSince(clickTime, initialWaitMs);
+    if (outcome === 'download') {
+      return true;
+    }
+    if (outcome === 'task') {
+      logStep(`[${reportKey}] Export task queued (Attempt #${attemptNum}) -> waiting up to 25s for file...`);
+      updateReportStatus(reportKey, 'running', 'Generating file...');
+      return await waitForDownloadSince(clickTime, 25000);
+    }
+    return false;
+  }
+
   async function notifyExpectedDownload(reportKey, periodConfig) {
     let sellerId = null;
     try {
@@ -593,7 +621,7 @@
     await notifyExpectedDownload(reportKey, periodConfig);
     triggerExportButtonClick(exportBtn);
 
-    const downloadedOnFirstTry = await waitForDownloadSince(clickTime1, 4500);
+    const downloadedOnFirstTry = await waitForExportAttempt(clickTime1, 1, reportKey, 4500);
     if (downloadedOnFirstTry) {
       logStep(`[${reportKey}] Download started on Attempt #1!`);
       updateReportStatus(reportKey, 'done', 'Downloaded ✓');
@@ -606,7 +634,7 @@
       return { status: 'empty' };
     }
 
-    // Attempt #2 (Platform fallback when 1st click on Export doesn't trigger download)
+    // Attempt #2 (Platform fallback when 1st click on Export didn't queue a task or trigger download)
     const retryBtn = findExportButton();
     if (retryBtn && !retryBtn.disabled) {
       const clickTime2 = Date.now();
@@ -615,7 +643,7 @@
       await notifyExpectedDownload(reportKey, periodConfig);
       triggerExportButtonClick(retryBtn);
 
-      const downloadedOnSecondTry = await waitForDownloadSince(clickTime2, 5500);
+      const downloadedOnSecondTry = await waitForExportAttempt(clickTime2, 2, reportKey, 5500);
       if (downloadedOnSecondTry) {
         logStep(`[${reportKey}] Download started on Attempt #2!`);
         updateReportStatus(reportKey, 'done', 'Downloaded ✓');
@@ -704,6 +732,10 @@
   }
 
   // --- Event & Message Listeners ---
+
+  window.addEventListener('TIKTOK_EXPORT_TASK_CREATED', () => {
+    lastExportTaskCreatedTimestamp = Date.now();
+  });
 
   window.addEventListener('TIKTOK_SELLER_CAPTURED', (event) => {
     const payload = event.detail;

@@ -10,6 +10,7 @@
   }
 
   const TARGET_ENDPOINT = '/api/v1/seller/workbench/get_all_sellers';
+  const EXPORT_ENDPOINT_HINTS = ['/live/list/export', '/video/analytics/video/list/export'];
   let lastCapturedPayload = null;
 
   function parseSellerData(data, requestUrl) {
@@ -94,6 +95,18 @@
           }).catch(err => {
             console.debug('[TikTok Extension] JSON parse error in fetch clone:', err);
           });
+        } else if (url && EXPORT_ENDPOINT_HINTS.some(hint => url.includes(hint))) {
+          const clone = response.clone();
+          clone.json().then(jsonData => {
+            const taskId = jsonData?.data?.file;
+            if (taskId) {
+              window.dispatchEvent(
+                new CustomEvent('TIKTOK_EXPORT_TASK_CREATED', {
+                  detail: { taskId, url, timestamp: Date.now() }
+                })
+              );
+            }
+          }).catch(() => {});
         }
       } catch (err) {
         console.debug('[TikTok Extension] Error in fetch hook:', err);
