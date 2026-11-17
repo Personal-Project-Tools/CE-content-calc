@@ -1,10 +1,16 @@
 /**
  * Content Script running in the ISOLATED world.
  * Bridges communication between injected.js (MAIN world) and Chrome Extension runtime,
- * and executes human-like DOM automation for downloading LIVE & Video Details reports.
+ * and executes human-like DOM + XPath automation for downloading LIVE & Video Details reports.
  */
 (function () {
   'use strict';
+
+  // Prevent duplicate listener registration if re-injected via chrome.scripting
+  if (window.__TTK_CONTENT_SCRIPT_LOADED__) {
+    return;
+  }
+  window.__TTK_CONTENT_SCRIPT_LOADED__ = true;
 
   // Only run on seller subdomains
   if (!window.location.hostname.includes('seller') && !window.location.hostname.includes('tiktokglobalshop')) {
@@ -21,14 +27,25 @@
     existingToast.remove();
   }
 
-  // --- Utility Helpers ---
+  // --- Utility & XPath Helpers ---
 
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  function logStep(text, isError = false) {
+    console.log(`[TikTok Extension] ${isError ? 'ERROR: ' : ''}${text}`);
+    try {
+      chrome.storage.local.set({
+        ttk_workflow_log: { text, isError, timestamp: Date.now() }
+      });
+    } catch (e) {
+      // extension context invalidated
+    }
+  }
+
   function isElementVisible(el) {
-    if (!el) return false;
+    if (!el || !(el instanceof Element)) return false;
     const rect = el.getBoundingClientRect();
     const style = window.getComputedStyle(el);
     return (
@@ -40,12 +57,35 @@
     );
   }
 
+  function getElementByXPath(xpath, contextNode = document) {
+    try {
+      const result = document.evaluate(xpath, contextNode, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+      for (let i = 0; i < result.snapshotLength; i++) {
+        const node = result.snapshotItem(i);
+        if (node && isElementVisible(node)) {
+          return node;
+        }
+      }
+    } catch (e) {
+      console.debug('[TikTok Extension] XPath eval error:', xpath, e);
+    }
+    return null;
+  }
+
   /**
-   * Simulates a full human mouse click sequence (pointerdown -> mousedown -> pointerup -> mouseup -> click)
-   * which is required by React / Arco Design components on TikTok Seller Center.
+   * Simulates a full human mouse click sequence + native .click()
+   * Handles SVG elements by targeting their interactive HTML parent container.
    */
-  function humanClick(element) {
+  function humanClick( rawElement ) {
+    if (!rawElement) return false;
+
+    // If an <svg> or <path> was matched, climb up to the closest HTML element (span/div/button)
+    let element = rawElement;
+    if (element instanceof SVGElement) {
+      element = element.closest('button, span, div') || element.parentElement;
+    }
     if (!element) return false;
+
     element.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
     const rect = element.getBoundingClientRect();
     const clientX = rect.left + rect.width / 2;
@@ -64,9 +104,17 @@
 
     element.dispatchEvent(new PointerEvent('pointerdown', eventInit));
     element.dispatchEvent(new MouseEvent('mousedown', eventInit));
+    if (typeof element.focus === 'function') {
+      element.focus({ preventScroll: true });
+    }
     element.dispatchEvent(new PointerEvent('pointerup', eventInit));
     element.dispatchEvent(new MouseEvent('mouseup', eventInit));
-    element.dispatchEvent(new MouseEvent('click', eventInit));
+
+    if (typeof element.click === 'function') {
+      element.click();
+    } else {
+      element.dispatchEvent(new MouseEvent('click', eventInit));
+    }
     return true;
   }
 
@@ -88,98 +136,117 @@
   }
 
   function updateReportStatus(reportKey, status, message = '') {
-    chrome.runtime.sendMessage({
-      action: 'UPDATE_REPORT_STATUS',
-      reportKey,
-      status,
-      message
-    });
+    try {
+      chrome.storage.local.get(['ttk_report_statuses'], (res) => {
+        const statuses = res.ttk_report_statuses || {};
+        statuses[reportKey] = { status, message, updatedAt: Date.now() };
+        chrome.storage.local.set({ ttk_report_statuses: statuses });
+      });
+    } catch (e) {
+      // extension context invalidated
+    }
   }
 
   // --- Step 1: Open & Select Date/Month on #page-title-datepicker ---
 
-  function findDatePickerTrigger() {
-    const container = document.getElementById('page-title-datepicker');
-    if (!container) return null;
+  function findDatePickerTriggerCandidates() {
+    const candidates = [];
 
-    // Prefer the SVG icon or input inside #page-title-datepicker (from Recorder JSON)
-    const svg = container.querySelector('svg');
-    if (svg && isElementVisible(svg)) {
-      return svg.closest('span') || svg;
+    // Exact XPaths from your Recorder JSONs:
+    // 1. LIVE_Details_workflow: //*[@id="page-title-datepicker"]/div/div[2]/div[3]/input
+    const xpathInput = getElementByXPath('//*[@id="page-title-datepicker"]//input');
+    if (xpathInput) candidates.push(xpathInput);
+
+    // 2. Video_Details_workflow & Monthly_flow: //*[@id="page-title-datepicker"]/div/div[2]/div[4]/span/svg
+    const xpathIconSpan = getElementByXPath('//*[@id="page-title-datepicker"]/div/div[2]/div[4]/span');
+    if (xpathIconSpan) candidates.push(xpathIconSpan);
+
+    // 3. Picker wrapper inside #page-title-datepicker
+    const container = document.getElementById('page-title-datepicker');
+    if (container && isElementVisible(container)) {
+      const inputs = Array.from(container.querySelectorAll('input')).filter(isElementVisible);
+      candidates.push(...inputs);
+      const pickerBox = container.querySelector('[class*="picker"]');
+      if (pickerBox && isElementVisible(pickerBox)) candidates.push(pickerBox);
+      candidates.push(container);
     }
-    const input = container.querySelector('input');
-    if (input && isElementVisible(input)) {
-      return input;
-    }
-    return container;
+
+    return candidates;
   }
 
   function findOpenCalendarPopup() {
-    // Look for the visible Arco DatePicker popup container in document.body
-    const spaceEl = Array.from(document.querySelectorAll('div.arco-space')).find((el) => {
+    // 1. From Monthly_flow JSON: div.arco-space containing "Day" and "Month"
+    const spaceEl = Array.from(document.querySelectorAll('div.arco-space, div[class*="space"]')).find((el) => {
+      if (!isElementVisible(el)) return false;
       const text = el.textContent || '';
-      return isElementVisible(el) && text.includes('Day') && text.includes('Month');
+      return text.includes('Day') && text.includes('Month');
     });
     if (spaceEl) {
-      return spaceEl.closest('div[class*="arco-trigger"], div[class*="arco-picker"], span')?.parentElement || spaceEl.parentElement?.parentElement;
+      // Climb up to the popup root under body > div > span > div
+      return (
+        spaceEl.closest('div[class*="trigger"], div[class*="picker-container"]') ||
+        spaceEl.parentElement?.parentElement?.parentElement ||
+        spaceEl.parentElement?.parentElement
+      );
     }
 
-    const pickers = Array.from(document.querySelectorAll('.arco-picker-container, .arco-picker-panel-wrapper')).filter(
-      isElementVisible
+    // 2. Fallback: look for any visible popup added at the end of document.body that has calendar days
+    const bodyPopups = Array.from(document.body.querySelectorAll('body > div > span > div, .arco-picker-container')).filter(
+      (el) => isElementVisible(el) && (el.textContent || '').includes('Mon') && (el.textContent || '').includes('Sun')
     );
-    return pickers[pickers.length - 1] || null;
+    return bodyPopups[bodyPopups.length - 1] || null;
   }
 
   async function openDatePickerPopup() {
-    const trigger = await waitForSelector(findDatePickerTrigger, 12000);
-    if (!trigger) {
+    logStep('Opening Date Picker (#page-title-datepicker)...');
+    const ready = await waitForSelector(() => findDatePickerTriggerCandidates().length > 0, 12000, 300);
+    if (!ready) {
       throw new Error('Could not find #page-title-datepicker on page');
     }
 
-    // If popup is not already visible, click trigger
     let popup = findOpenCalendarPopup();
-    if (!popup) {
-      humanClick(trigger);
-      await sleep(400);
-      popup = await waitForSelector(findOpenCalendarPopup, 3000, 150);
-    }
+    if (popup) return popup;
 
-    // Fallback: click input inside #page-title-datepicker if SVG didn't open it
-    if (!popup) {
-      const container = document.getElementById('page-title-datepicker');
-      const input = container?.querySelector('input');
-      if (input) {
-        humanClick(input);
-        popup = await waitForSelector(findOpenCalendarPopup, 3000, 150);
+    const candidates = findDatePickerTriggerCandidates();
+    for (const trigger of candidates) {
+      humanClick(trigger);
+      await sleep(450);
+      popup = await waitForSelector(findOpenCalendarPopup, 1800, 150);
+      if (popup) {
+        logStep('Date Picker popup opened.');
+        return popup;
       }
     }
 
-    if (!popup) {
-      throw new Error('DatePicker popup did not open');
-    }
-    return popup;
+    throw new Error('DatePicker popup did not open after clicking #page-title-datepicker');
   }
 
   async function switchCalendarModeTab(modeLabel) {
-    // From Recorder JSON: "div.arco-space > div:nth-of-type(3) > div" with text "Month" (or "Day")
-    const modeBtn = Array.from(document.querySelectorAll('div.arco-space > div > div, div.arco-space div')).find(
-      (el) => isElementVisible(el) && el.textContent.trim() === modeLabel && el.children.length === 0
+    // From Monthly_flow JSON: "div.arco-space > div:nth-of-type(3) > div" with text "Month" (or "Day")
+    const xpathMode = getElementByXPath(
+      `//div[contains(@class, "arco-space")]//div[normalize-space(text())="${modeLabel}"]`
     );
-    if (modeBtn) {
-      humanClick(modeBtn);
-      await sleep(350);
+    if (xpathMode) {
+      humanClick(xpathMode);
+      await sleep(400);
+      return true;
+    }
+
+    const popup = findOpenCalendarPopup() || document.body;
+    const fallbackBtn = Array.from(popup.querySelectorAll('div, span')).find(
+      (el) => isElementVisible(el) && el.children.length === 0 && el.textContent.trim() === modeLabel
+    );
+    if (fallbackBtn) {
+      humanClick(fallbackBtn);
+      await sleep(400);
       return true;
     }
     return false;
   }
 
-  /**
-   * Navigates the calendar header (e.g. "11/2026" or "2026") to match targetYear and targetMonth (optional).
-   */
   async function navigateCalendarHeader(targetYear, targetMonth = null) {
     for (let step = 0; step < 24; step++) {
       const popup = findOpenCalendarPopup() || document.body;
-      // Find header text such as "11/2026", "2026-11", or "2026"
       const candidates = Array.from(popup.querySelectorAll('div, span')).filter((el) => {
         if (!isElementVisible(el) || el.children.length > 0) return false;
         const txt = el.textContent.trim();
@@ -208,30 +275,29 @@
       if (currentYear === null) break;
 
       if (targetMonth === null) {
-        // Month mode: only compare year
         if (currentYear === targetYear) break;
       } else {
-        // Day mode: compare year and month
         if (currentYear === targetYear && currentMonth === targetMonth) break;
       }
 
-      // Find header container with navigation arrows (<, <<, >, >>)
       const headerRow = headerEl.parentElement?.parentElement || headerEl.parentElement;
-      const icons = headerRow ? Array.from(headerRow.querySelectorAll('svg, button, span[class*="icon"], div[class*="icon"]')).filter(isElementVisible) : [];
+      const icons = headerRow
+        ? Array.from(headerRow.querySelectorAll('svg, button, span[class*="icon"], div[class*="icon"]')).filter(
+            isElementVisible
+          )
+        : [];
 
       const targetTotal = targetYear * 12 + (targetMonth || 1);
       const currentTotal = currentYear * 12 + (currentMonth || 1);
 
       if (targetTotal < currentTotal) {
-        // Click single prev month '<' (usually 2nd icon on left if '<<' and '<' exist, or 1st icon)
         const prevBtn = targetMonth !== null && icons.length >= 4 ? icons[1] : icons[0];
         if (prevBtn) humanClick(prevBtn);
       } else {
-        // Click single next month '>'
         const nextBtn = targetMonth !== null && icons.length >= 4 ? icons[icons.length - 2] : icons[icons.length - 1];
         if (nextBtn) humanClick(nextBtn);
       }
-      await sleep(250);
+      await sleep(300);
     }
   }
 
@@ -239,23 +305,24 @@
     const dayStr = String(dayNumber);
     const popup = findOpenCalendarPopup() || document.body;
 
-    // 1. Prefer Arco Design's .arco-picker-cell-in-view (current month's active cells)
-    const inViewCells = Array.from(popup.querySelectorAll('.arco-picker-cell-in-view')).filter(isElementVisible);
+    // 1. Prefer Arco Design's in-view cells (.arco-picker-cell-in-view)
+    const inViewCells = Array.from(
+      popup.querySelectorAll('.arco-picker-cell-in-view, [class*="picker-cell-in-view"]')
+    ).filter(isElementVisible);
+
     for (const cell of inViewCells) {
-      const inner = Array.from(cell.querySelectorAll('div')).find(
+      const leaf = Array.from(cell.querySelectorAll('div')).find(
         (d) => d.children.length === 0 && d.textContent.trim() === dayStr
       );
-      if (inner || cell.textContent.trim() === dayStr) {
-        return inner || cell;
-      }
+      if (leaf) return leaf;
+      if (cell.textContent.trim() === dayStr) return cell;
     }
 
     // 2. Fallback: find leaf divs inside the calendar popup matching dayStr
-    const allCells = Array.from(popup.querySelectorAll('.arco-picker-cell div, div > div')).filter(
+    const allCells = Array.from(popup.querySelectorAll('div > div > div')).filter(
       (el) => isElementVisible(el) && el.children.length === 0 && el.textContent.trim() === dayStr
     );
     if (allCells.length === 0) return null;
-    // If day <= 15, pick first occurrence; if day > 15, pick last occurrence (avoids prev/next month overflow)
     return dayNumber <= 15 ? allCells[0] : allCells[allCells.length - 1];
   }
 
@@ -264,7 +331,6 @@
     if (!monthLabel) return null;
     const popup = findOpenCalendarPopup() || document.body;
 
-    // From Monthly_flow JSON: leaf div with text "Oct", "Sep", etc.
     const match = Array.from(popup.querySelectorAll('div')).find(
       (el) => isElementVisible(el) && el.children.length === 0 && el.textContent.trim() === monthLabel
     );
@@ -276,11 +342,12 @@
     await openDatePickerPopup();
 
     if (mode === 'month') {
-      // e.g. "2026-10"
       const [yyyyStr, mmStr] = (periodConfig.month || '').split('-');
       const targetYear = parseInt(yyyyStr, 10);
       const targetMonthIdx = parseInt(mmStr, 10) - 1;
+      const monthName = MONTH_NAMES[targetMonthIdx] || mmStr;
 
+      logStep(`Switching calendar to Month mode (${monthName} ${targetYear})...`);
       await switchCalendarModeTab('Month');
       if (!isNaN(targetYear)) {
         await navigateCalendarHeader(targetYear, null);
@@ -288,19 +355,19 @@
 
       const monthCell = await waitForSelector(() => findMonthCellInPopup(targetMonthIdx), 4000, 150);
       if (!monthCell) {
-        throw new Error(`Could not find month "${MONTH_NAMES[targetMonthIdx]}" on calendar`);
+        throw new Error(`Could not find month "${monthName}" on calendar`);
       }
 
-      // Both LIVE and Video close after 1 click in Month mode
+      logStep(`Clicking month "${monthName}"...`);
       humanClick(monthCell);
-      await sleep(600);
+      await sleep(700);
     } else {
-      // Single Day mode: e.g. "2026-11-15"
       const [yyyyStr, mmStr, ddStr] = (periodConfig.date || '').split('-');
       const targetYear = parseInt(yyyyStr, 10);
       const targetMonth = parseInt(mmStr, 10);
       const targetDay = parseInt(ddStr, 10);
 
+      logStep(`Selecting Single Day: ${periodConfig.date} (${pageType.toUpperCase()})...`);
       await switchCalendarModeTab('Day');
       if (!isNaN(targetYear) && !isNaN(targetMonth)) {
         await navigateCalendarHeader(targetYear, targetMonth);
@@ -311,16 +378,17 @@
         throw new Error(`Could not find day "${targetDay}" on calendar`);
       }
 
-      // Click #1 (On LIVE -> Details, 1 click selects the day and closes the calendar)
+      logStep(`Click #1 on day ${targetDay}...`);
       humanClick(dayCell1);
-      await sleep(350);
+      await sleep(400);
 
       // On Video -> Details, Day mode is a Date Range picker: click the same day a 2nd time!
       if (pageType === 'video') {
-        const dayCell2 = findDayCellInPopup(targetDay);
+        const dayCell2 = await waitForSelector(() => findDayCellInPopup(targetDay), 2500, 150);
         if (dayCell2) {
+          logStep(`Click #2 on day ${targetDay} (Video range end)...`);
           humanClick(dayCell2);
-          await sleep(500);
+          await sleep(600);
         }
       }
     }
@@ -329,24 +397,24 @@
   // --- Step 2: Wait for Table Loading & Switch Tabs ---
 
   async function waitForDataLoadingComplete(timeoutMs = 15000) {
-    await sleep(900); // Initial settle for React state update
+    await sleep(1000);
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       const spinners = Array.from(
-        document.querySelectorAll('.arco-spin-loading, .arco-spin-dot, [class*="loading-mask"]')
+        document.querySelectorAll('.arco-spin-loading, .arco-spin-dot, [class*="loading-mask"], [class*="spin-dot"]')
       ).filter(isElementVisible);
       if (spinners.length === 0) {
         break;
       }
       await sleep(300);
     }
-    await sleep(600);
+    await sleep(700);
   }
 
   function hasNoAvailableData() {
     const mainEl = document.getElementById('main') || document.body;
     const text = mainEl.innerText || '';
-    return text.includes('No available data yet') || text.includes('No data');
+    return text.includes('No available data yet');
   }
 
   function findAccountTab(tabType) {
@@ -359,26 +427,52 @@
       return byId.querySelector('div > div') || byId;
     }
 
-    // 2. Check by exact text (works on both LIVE Details and Video Details div.rounded-r)
-    const mainEl = document.getElementById('main') || document.body;
-    const match = Array.from(mainEl.querySelectorAll('div, span, button')).find(
-      (el) => isElementVisible(el) && el.children.length === 0 && el.textContent.trim() === targetText
-    );
-    return match ? match.closest('div[role="tab"], div.rounded-r, div.rounded-l, button') || match : null;
+    // 2. XPath search inside #main for exact tab label (covers Video_Details_workflow div.rounded-r)
+    const byXPath = getElementByXPath(`//*[@id="main"]//*[normalize-space(text())="${targetText}"]`);
+    if (byXPath) {
+      return byXPath.closest('div[role="tab"], div.rounded-r, div.rounded-l, button') || byXPath;
+    }
+
+    return null;
   }
 
-  // --- Step 3: Click Export with Smart Retry (handles platform double-click quirk) ---
+  // --- Step 3: Click Export with Smart Retry ---
 
   function findExportButton() {
+    // 1. Check exact XPaths from your LIVE and Video Recorder JSONs
+    const exactXPaths = [
+      '//*[@id="main"]//button[normalize-space(.)="Export" or @aria-label="Export"]',
+      '//*[@id="main"]/div[2]/div/div/div/div/div[2]/div[3]/div/div/div/div/div[2]/div[1]/div[2]/div[2]/button',
+      '//*[@id="main"]/div[2]/div/div/div/div/div[2]/div[3]/div/div/div/div/div[2]/div[1]/div/div[2]/button',
+      '//*[@id="main"]/div[2]/div/div/div/div/div[2]/div[3]/div/div/div/div/div[2]/div/div[1]/div[2]/div/div/button'
+    ];
+
+    for (const xp of exactXPaths) {
+      const btn = getElementByXPath(xp);
+      if (btn) return btn;
+    }
+
+    // 2. Fallback: any visible button containing "Export"
     const mainEl = document.getElementById('main') || document.body;
     const buttons = Array.from(mainEl.querySelectorAll('button')).filter((btn) => {
       if (!isElementVisible(btn)) return false;
-      return btn.textContent.trim() === 'Export' || btn.getAttribute('aria-label') === 'Export';
+      const text = (btn.textContent || '').trim();
+      return text === 'Export' || text.includes('Export') || btn.getAttribute('aria-label') === 'Export';
     });
     return buttons[0] || null;
   }
 
-  async function waitForDownloadSince(timestampMs, waitMs = 4500) {
+  function triggerExportButtonClick(exportBtn) {
+    if (!exportBtn) return;
+    // Click the <button> itself AND its inner <span> if present (covers both Recorder JSON patterns)
+    humanClick(exportBtn);
+    const innerSpan = exportBtn.querySelector('span');
+    if (innerSpan) {
+      innerSpan.click();
+    }
+  }
+
+  async function waitForDownloadSince(timestampMs, waitMs = 5000) {
     const start = Date.now();
     while (Date.now() - start < waitMs) {
       if (lastDownloadTimestamp >= timestampMs) {
@@ -391,14 +485,17 @@
 
   async function exportCurrentTabReport(reportKey) {
     updateReportStatus(reportKey, 'running', 'Loading...');
+    logStep(`[${reportKey}] Waiting for table data to load...`);
     await waitForDataLoadingComplete();
 
-    const exportBtn = await waitForSelector(findExportButton, 6000, 200);
+    const exportBtn = await waitForSelector(findExportButton, 6000, 250);
     if (!exportBtn) {
       if (hasNoAvailableData()) {
+        logStep(`[${reportKey}] No available data yet -> Skipped.`);
         updateReportStatus(reportKey, 'empty', 'No data');
         return { status: 'empty' };
       }
+      logStep(`[${reportKey}] Export button not found!`, true);
       updateReportStatus(reportKey, 'error', 'No Export btn');
       return { status: 'error', reason: 'Export button not found' };
     }
@@ -409,23 +506,25 @@
       exportBtn.classList.contains('arco-btn-disabled');
 
     if (isDisabled || hasNoAvailableData()) {
+      logStep(`[${reportKey}] Export button is disabled / No data -> Skipped.`);
       updateReportStatus(reportKey, 'empty', 'No data');
       return { status: 'empty' };
     }
 
     // Attempt #1: Click Export button
     const clickTime1 = Date.now();
+    logStep(`[${reportKey}] Clicking Export button (Attempt #1)...`);
     updateReportStatus(reportKey, 'running', 'Exporting...');
-    humanClick(exportBtn);
+    triggerExportButtonClick(exportBtn);
 
     const downloadedOnFirstTry = await waitForDownloadSince(clickTime1, 4500);
     if (downloadedOnFirstTry) {
+      logStep(`[${reportKey}] Download started on Attempt #1!`);
       updateReportStatus(reportKey, 'done', 'Downloaded ✓');
-      await sleep(800);
+      await sleep(1000);
       return { status: 'done', attempts: 1 };
     }
 
-    // Check if after clicking once, page showed no data
     if (hasNoAvailableData()) {
       updateReportStatus(reportKey, 'empty', 'No data');
       return { status: 'empty' };
@@ -435,19 +534,21 @@
     const retryBtn = findExportButton();
     if (retryBtn && !retryBtn.disabled) {
       const clickTime2 = Date.now();
+      logStep(`[${reportKey}] No download after 4.5s -> Clicking Export (Attempt #2)...`);
       updateReportStatus(reportKey, 'running', 'Retry click...');
-      humanClick(retryBtn);
+      triggerExportButtonClick(retryBtn);
 
       const downloadedOnSecondTry = await waitForDownloadSince(clickTime2, 5500);
       if (downloadedOnSecondTry) {
+        logStep(`[${reportKey}] Download started on Attempt #2!`);
         updateReportStatus(reportKey, 'done', 'Downloaded ✓');
-        await sleep(800);
+        await sleep(1000);
         return { status: 'done', attempts: 2 };
       }
     }
 
-    // Even if browser handled download via internal blob/iframe, mark as Triggered
-    updateReportStatus(reportKey, 'done', 'Triggered ✓');
+    logStep(`[${reportKey}] Export clicked (check browser download prompt if Save As is enabled).`);
+    updateReportStatus(reportKey, 'done', 'Clicked ✓');
     return { status: 'done', attempts: 2 };
   }
 
@@ -460,10 +561,9 @@
 
     const pageType = getPageReportType();
     if (!pageType) {
-      return {
-        ok: false,
-        error: 'Current tab is not on LIVE Details or Video Details page'
-      };
+      const msg = 'Please open LIVE Details or Video Details page first.';
+      logStep(msg, true);
+      return { ok: false, error: msg };
     }
 
     isWorkflowRunning = true;
@@ -471,13 +571,18 @@
     const affiliateKey = `${pageType}_affiliate`;
 
     try {
+      logStep(`[v3] Content script received command on ${pageType.toUpperCase()} Details. Mode: ${periodConfig?.mode}`);
       updateReportStatus(linkedKey, 'running', 'Selecting date...');
 
-      // 1. Ensure we start on "Linked accounts" tab (default when entering page)
-      const linkedTab = await waitForSelector(() => findAccountTab('linked'), 12000, 300);
+      // 1. Ensure we are on "Linked accounts" tab first (do not block long if tab markup differs)
+      logStep('Looking for "Linked accounts" tab...');
+      const linkedTab = await waitForSelector(() => findAccountTab('linked'), 4000, 300);
       if (linkedTab) {
+        logStep(`Ensuring "Linked accounts" tab is active...`);
         humanClick(linkedTab);
         await sleep(500);
+      } else {
+        logStep('"Linked accounts" tab not found, assuming it is already active.');
       }
 
       // 2. Select Single Day or Month on #page-title-datepicker
@@ -488,18 +593,21 @@
 
       // 4. Switch to "Affiliate accounts" tab (Date Range is preserved on same page!)
       updateReportStatus(affiliateKey, 'running', 'Switching tab...');
+      logStep(`Switching to "Affiliate accounts" tab...`);
       const affiliateTab = await waitForSelector(() => findAccountTab('affiliate'), 6000, 250);
       if (!affiliateTab) {
+        logStep(`Could not find "Affiliate accounts" tab!`, true);
         updateReportStatus(affiliateKey, 'error', 'Tab not found');
         return { ok: false, error: 'Affiliate accounts tab not found' };
       }
 
       humanClick(affiliateTab);
-      await sleep(700);
+      await sleep(800);
 
       // 5. Export Report #2 (Affiliate accounts)
       const affiliateResult = await exportCurrentTabReport(affiliateKey);
 
+      logStep(`Finished ${pageType.toUpperCase()} Details page workflow!`);
       return {
         ok: true,
         pageType,
@@ -510,7 +618,8 @@
       };
     } catch (err) {
       console.error('[TikTok Extension] Workflow error:', err);
-      updateReportStatus(linkedKey, 'error', err.message || 'Error');
+      logStep(err.message || String(err), true);
+      updateReportStatus(linkedKey, 'error', 'Failed');
       return { ok: false, error: err.message || String(err) };
     } finally {
       isWorkflowRunning = false;
@@ -519,7 +628,6 @@
 
   // --- Event & Message Listeners ---
 
-  // Listen for captured seller data from injected script
   window.addEventListener('TIKTOK_SELLER_CAPTURED', (event) => {
     const payload = event.detail;
     if (!payload || !payload.shops) return;
@@ -531,13 +639,12 @@
       },
       () => {
         if (chrome.runtime.lastError) {
-          // Background service worker waking up
+          // ignore
         }
       }
     );
   });
 
-  // Listen for messages from popup or background orchestrator
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'REFRESH_SELLER_DATA') {
       window.dispatchEvent(new CustomEvent('TIKTOK_SELLER_REQUEST_STATE'));
@@ -552,16 +659,21 @@
     }
 
     if (request.action === 'RUN_PAGE_WORKFLOW') {
-      executeDetailsPageWorkflow(request.periodConfig).then((res) => {
-        sendResponse(res);
-      });
-      return true; // keep async channel open
+      logStep('[v3] RUN_PAGE_WORKFLOW message received by content script.');
+      executeDetailsPageWorkflow(request.periodConfig)
+        .then((res) => sendResponse(res))
+        .catch((err) => sendResponse({ ok: false, error: err?.message || String(err) }));
+      return true;
     }
 
-    return true;
+    if (request.action === 'PING') {
+      sendResponse({ ok: true });
+      return true;
+    }
+
+    return false;
   });
 
-  // Request seller state on initial content script load
   setTimeout(() => {
     window.dispatchEvent(new CustomEvent('TIKTOK_SELLER_REQUEST_STATE'));
   }, 1000);

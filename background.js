@@ -39,6 +39,16 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function saveWorkflowLog(text, isError = false) {
+  chrome.storage.local.set({
+    ttk_workflow_log: {
+      text,
+      isError,
+      timestamp: Date.now()
+    }
+  });
+}
+
 function updateReportChecklistStorage(reportKey, status, message = '') {
   chrome.storage.local.get(['ttk_report_statuses'], (res) => {
     const statuses = res.ttk_report_statuses || {};
@@ -77,33 +87,62 @@ function waitForTabComplete(tabId, timeoutMs = 25000) {
   });
 }
 
+/**
+ * Ensures content.js is injected into the tab (even if the user didn't manually refresh the tab after reloading the extension)
+ * and sends a message to content.js.
+ */
+async function sendMessageWithAutoInject(tabId, payload) {
+  saveWorkflowLog('Background: sending command to tab...');
+  return new Promise((resolve) => {
+    chrome.tabs.sendMessage(tabId, payload, async (response) => {
+      if (chrome.runtime.lastError) {
+        saveWorkflowLog(`Background: tab not reachable (${chrome.runtime.lastError.message}) -> injecting content.js...`, true);
+      }
+      if (chrome.runtime.lastError) {
+        // Content script not loaded yet -> inject content.js dynamically and retry
+        try {
+          if (chrome.scripting) {
+            await chrome.scripting.executeScript({
+              target: { tabId },
+              files: ['content.js']
+            });
+            await sleep(300);
+            chrome.tabs.sendMessage(tabId, payload, (retryResponse) => {
+              if (chrome.runtime.lastError) {
+                resolve({ ok: false, error: chrome.runtime.lastError.message });
+              } else {
+                resolve(retryResponse || { ok: false, error: 'Empty response after script injection' });
+              }
+            });
+            return;
+          }
+        } catch (injectErr) {
+          resolve({ ok: false, error: injectErr.message || String(injectErr) });
+          return;
+        }
+        resolve({ ok: false, error: chrome.runtime.lastError.message });
+      } else {
+        resolve(response || { ok: false, error: 'No response from content script' });
+      }
+    });
+  });
+}
+
 async function navigateAndRunPageWorkflow(tabId, targetUrl, periodConfig) {
+  saveWorkflowLog(`Navigating to ${targetUrl.includes('live-details') ? 'LIVE Details' : 'Video Details'}...`);
   await chrome.tabs.update(tabId, { url: targetUrl });
   await sleep(1500);
   await waitForTabComplete(tabId, 25000);
-  // Give SPA (React + Arco) time to mount #page-title-datepicker
-  await sleep(3000);
+  // Give React + Arco time to render #page-title-datepicker and table
+  await sleep(3500);
 
-  return new Promise((resolve) => {
-    chrome.tabs.sendMessage(
-      tabId,
-      {
-        action: 'RUN_PAGE_WORKFLOW',
-        periodConfig
-      },
-      (response) => {
-        if (chrome.runtime.lastError) {
-          resolve({ ok: false, error: chrome.runtime.lastError.message });
-        } else {
-          resolve(response || { ok: false, error: 'No response from content script' });
-        }
-      }
-    );
+  return sendMessageWithAutoInject(tabId, {
+    action: 'RUN_PAGE_WORKFLOW',
+    periodConfig
   });
 }
 
 async function runFullFourReportWorkflow(tabId, reportUrls, periodConfig) {
-  // Reset checklist statuses to Pending
   const initialStatuses = {
     live_linked: { status: 'pending', message: 'Queued' },
     live_affiliate: { status: 'pending', message: 'Queued' },
@@ -119,14 +158,16 @@ async function runFullFourReportWorkflow(tabId, reportUrls, periodConfig) {
     // Phase 1: LIVE -> Details (2 reports: Linked + Affiliate)
     const liveRes = await navigateAndRunPageWorkflow(tabId, reportUrls.live_details, periodConfig);
 
-    await sleep(1200);
+    await sleep(1500);
 
     // Phase 2: Video -> Details (2 reports: Linked + Affiliate, re-selects Date/Month)
     const videoRes = await navigateAndRunPageWorkflow(tabId, reportUrls.video_details, periodConfig);
 
+    saveWorkflowLog('All 4 report steps finished!');
     await chrome.storage.local.set({ ttk_workflow_running: false });
     return { ok: true, liveRes, videoRes };
   } catch (err) {
+    saveWorkflowLog(err.message || String(err), true);
     await chrome.storage.local.set({ ttk_workflow_running: false });
     return { ok: false, error: err.message || String(err) };
   }
@@ -162,6 +203,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === 'WORKFLOW_LOG') {
+    saveWorkflowLog(message.text, message.isError);
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  if (message.action === 'RUN_CURRENT_TAB_WORKFLOW') {
+    const { tabId, periodConfig } = message;
+    sendMessageWithAutoInject(tabId, {
+      action: 'RUN_PAGE_WORKFLOW',
+      periodConfig
+    }).then((res) => {
+      sendResponse(res);
+    });
+    return true;
+  }
+
   if (message.action === 'START_FULL_WORKFLOW') {
     const { tabId, reportUrls, periodConfig } = message;
     runFullFourReportWorkflow(tabId, reportUrls, periodConfig).then((res) => {
@@ -172,7 +230,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.action === 'CLEAR_SELLER_DATA') {
     chrome.storage.local.remove(
-      ['ttk_seller_payload', 'ttk_last_updated', 'ttk_report_statuses', 'ttk_workflow_running'],
+      ['ttk_seller_payload', 'ttk_last_updated', 'ttk_report_statuses', 'ttk_workflow_running', 'ttk_workflow_log'],
       () => {
         chrome.action.setBadgeText({ text: '' });
         sendResponse({ success: true });

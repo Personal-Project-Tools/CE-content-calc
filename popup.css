@@ -514,6 +514,24 @@ body {
   cursor: not-allowed;
 }
 
+.workflow-log-box {
+  margin-top: 4px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  background-color: rgba(0, 0, 0, 0.3);
+  border-left: 3px solid var(--accent-blue);
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+.workflow-log-box.log-error {
+  border-left-color: #ef4444;
+  color: #fca5a5;
+  background-color: rgba(239, 68, 68, 0.1);
+}
+
 .routes-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;

@@ -116,9 +116,21 @@ document.addEventListener('DOMContentLoaded', () => {
   const inputTargetMonth = document.getElementById('input-target-month');
   const btnRunAllReports = document.getElementById('btn-run-all-reports');
   const btnRunCurrentPage = document.getElementById('btn-run-current-page');
+  const workflowLogBox = document.getElementById('workflow-log-box');
 
   let currentReportUrls = null;
   let currentPeriodMode = 'day'; // 'day' | 'month'
+
+  function renderWorkflowLog(logObj) {
+    if (!workflowLogBox) return;
+    if (!logObj || !logObj.text) {
+      workflowLogBox.classList.add('hidden');
+      return;
+    }
+    workflowLogBox.classList.remove('hidden');
+    workflowLogBox.classList.toggle('log-error', Boolean(logObj.isError));
+    workflowLogBox.textContent = logObj.text;
+  }
 
   function getPeriodConfigFromInputs() {
     return {
@@ -154,8 +166,11 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function loadChecklistStatuses() {
-    chrome.storage.local.get(['ttk_report_statuses', 'ttk_workflow_running'], (res) => {
+    chrome.storage.local.get(['ttk_report_statuses', 'ttk_workflow_running', 'ttk_workflow_log'], (res) => {
       renderChecklistStatuses(res.ttk_report_statuses || {}, res.ttk_workflow_running);
+      if (res.ttk_workflow_log) {
+        renderWorkflowLog(res.ttk_workflow_log);
+      }
     });
   }
 
@@ -414,19 +429,42 @@ document.addEventListener('DOMContentLoaded', () => {
 
         btnRunCurrentPage.disabled = true;
         btnRunCurrentPage.textContent = '⏳ Running Current Page...';
+        renderWorkflowLog({ text: 'Starting workflow on current tab...', isError: false });
 
-        chrome.tabs.sendMessage(
-          activeTab.id,
-          {
-            action: 'RUN_PAGE_WORKFLOW',
-            periodConfig
-          },
-          () => {
-            btnRunCurrentPage.disabled = false;
-            btnRunCurrentPage.textContent = 'Run Current Page Only (2 Reports)';
-            loadChecklistStatuses();
+        const finish = (res) => {
+          btnRunCurrentPage.disabled = false;
+          btnRunCurrentPage.textContent = 'Run Current Page Only (2 Reports)';
+          if (res && res.ok === false && res.error) {
+            renderWorkflowLog({ text: res.error, isError: true });
           }
-        );
+          loadChecklistStatuses();
+        };
+
+        const sendRun = (onDone) => {
+          chrome.tabs.sendMessage(activeTab.id, { action: 'RUN_PAGE_WORKFLOW', periodConfig }, (res) => {
+            if (chrome.runtime.lastError) {
+              onDone(null, chrome.runtime.lastError.message);
+            } else {
+              onDone(res);
+            }
+          });
+        };
+
+        // Try direct message to the tab; if content script is missing, inject it and retry.
+        chrome.tabs.sendMessage(activeTab.id, { action: 'PING' }, () => {
+          if (!chrome.runtime.lastError) {
+            sendRun((res, err) => finish(err ? { ok: false, error: err } : res));
+            return;
+          }
+          renderWorkflowLog({ text: 'Content script missing in tab -> injecting...', isError: false });
+          chrome.scripting.executeScript({ target: { tabId: activeTab.id }, files: ['content.js'] }, () => {
+            if (chrome.runtime.lastError) {
+              finish({ ok: false, error: `Cannot inject into this tab: ${chrome.runtime.lastError.message}` });
+              return;
+            }
+            setTimeout(() => sendRun((res, err) => finish(err ? { ok: false, error: err } : res)), 400);
+          });
+        });
       });
     });
   }
@@ -437,7 +475,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (changes.ttk_seller_payload) {
         loadStoredData();
       }
-      if (changes.ttk_report_statuses || changes.ttk_workflow_running) {
+      if (changes.ttk_report_statuses || changes.ttk_workflow_running || changes.ttk_workflow_log) {
         loadChecklistStatuses();
       }
     }
