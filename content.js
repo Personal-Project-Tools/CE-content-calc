@@ -107,7 +107,15 @@
     }
     if (!element) return false;
 
-    element.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+    const rectBefore = element.getBoundingClientRect();
+    if (
+      rectBefore.top < 0 ||
+      rectBefore.bottom > window.innerHeight ||
+      rectBefore.left < 0 ||
+      rectBefore.right > window.innerWidth
+    ) {
+      element.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
+    }
     const rect = element.getBoundingClientRect();
     const clientX = rect.left + rect.width / 2;
     const clientY = rect.top + rect.height / 2;
@@ -223,8 +231,8 @@
     const candidates = findDatePickerTriggerCandidates();
     for (const trigger of candidates) {
       humanClick(trigger);
-      await sleep(450);
-      popup = await waitForSelector(findOpenCalendarPopup, 1800, 150);
+      await sleep(150);
+      popup = await waitForSelector(findOpenCalendarPopup, 1500, 100);
       if (popup) {
         logStep('Date Picker popup opened.');
         return popup;
@@ -257,105 +265,262 @@
     return false;
   }
 
-  async function navigateCalendarHeader(targetYear, targetMonth = null) {
-    for (let step = 0; step < 24; step++) {
-      const popup = findOpenCalendarPopup() || document.body;
-      const candidates = Array.from(popup.querySelectorAll('div, span')).filter((el) => {
-        if (!isElementVisible(el) || el.children.length > 0) return false;
-        const txt = el.textContent.trim();
-        return /^\d{1,2}\/\d{4}$/.test(txt) || /^\d{4}-\d{1,2}$/.test(txt) || /^\d{4}$/.test(txt);
-      });
-
-      if (candidates.length === 0) break;
-      const headerEl = candidates[0];
-      const txt = headerEl.textContent.trim();
-
-      let currentYear = null;
-      let currentMonth = null;
-
-      if (/^(\d{1,2})\/(\d{4})$/.test(txt)) {
-        const [, m, y] = txt.match(/^(\d{1,2})\/(\d{4})$/);
-        currentMonth = parseInt(m, 10);
-        currentYear = parseInt(y, 10);
-      } else if (/^(\d{4})-(\d{1,2})$/.test(txt)) {
-        const [, y, m] = txt.match(/^(\d{4})-(\d{1,2})$/);
-        currentYear = parseInt(y, 10);
-        currentMonth = parseInt(m, 10);
-      } else if (/^\d{4}$/.test(txt)) {
-        currentYear = parseInt(txt, 10);
+  function isCalendarCellDisabled(el) {
+    let cur = el;
+    for (let depth = 0; cur && depth < 5; depth++) {
+      if (cur instanceof Element) {
+        const cls = typeof cur.className === 'string' ? cur.className : cur.getAttribute('class') || '';
+        const isCellOrIcon =
+          cls.includes('picker-cell') ||
+          cls.includes('picker-header-icon') ||
+          cur.tagName === 'BUTTON';
+        if (
+          cls.includes('disabled') ||
+          cur.hasAttribute('disabled') ||
+          cur.getAttribute('aria-disabled') === 'true'
+        ) {
+          return true;
+        }
+        const style = window.getComputedStyle(cur);
+        if (style.cursor === 'not-allowed' || (isCellOrIcon && style.pointerEvents === 'none')) {
+          return true;
+        }
+        if (cls.includes('picker-cell') || cls.includes('picker-header-icon')) {
+          break;
+        }
       }
-
-      if (currentYear === null) break;
-
-      if (targetMonth === null) {
-        if (currentYear === targetYear) break;
-      } else {
-        if (currentYear === targetYear && currentMonth === targetMonth) break;
-      }
-
-      const headerRow = headerEl.parentElement?.parentElement || headerEl.parentElement;
-      const icons = headerRow
-        ? Array.from(headerRow.querySelectorAll('svg, button, span[class*="icon"], div[class*="icon"]')).filter(
-            isElementVisible
-          )
-        : [];
-
-      const targetTotal = targetYear * 12 + (targetMonth || 1);
-      const currentTotal = currentYear * 12 + (currentMonth || 1);
-
-      if (targetTotal < currentTotal) {
-        const prevBtn = targetMonth !== null && icons.length >= 4 ? icons[1] : icons[0];
-        if (prevBtn) humanClick(prevBtn);
-      } else {
-        const nextBtn = targetMonth !== null && icons.length >= 4 ? icons[icons.length - 2] : icons[icons.length - 1];
-        if (nextBtn) humanClick(nextBtn);
-      }
-      await sleep(300);
+      cur = cur.parentElement;
     }
+    return false;
   }
 
-  function findDayCellInPopup(dayNumber) {
+  function parseCalendarHeaderText(rawText, requireMonth) {
+    const txt = (rawText || '').replace(/\s+/g, '');
+    if (requireMonth) {
+      let match = txt.match(/^(\d{1,2})\/(\d{4})$/);
+      if (match) {
+        return { month: parseInt(match[1], 10), year: parseInt(match[2], 10) };
+      }
+      match = txt.match(/^(\d{4})-(\d{1,2})$/);
+      if (match) {
+        return { year: parseInt(match[1], 10), month: parseInt(match[2], 10) };
+      }
+      return null;
+    }
+
+    const yearMatch = txt.match(/^(\d{4})$/);
+    if (yearMatch) {
+      return { year: parseInt(yearMatch[1], 10), month: null };
+    }
+    return null;
+  }
+
+  function getCalendarHeaderStates(popup, requireMonth = true) {
+    const candidates = Array.from(popup.querySelectorAll('div, span')).filter((el) => {
+      if (!isElementVisible(el) || el.querySelector('svg') !== null) return false;
+      return parseCalendarHeaderText(el.textContent, requireMonth) !== null;
+    });
+
+    const deepest = candidates.filter(
+      (el) => !candidates.some((other) => other !== el && el.contains(other))
+    );
+
+    return deepest.map((headerEl) => {
+      const parsed = parseCalendarHeaderText(headerEl.textContent, requireMonth);
+      return {
+        headerEl,
+        year: parsed.year,
+        month: parsed.month
+      };
+    });
+  }
+
+  function getCalendarHeaderState(popup, requireMonth = true, targetYear = null, targetMonth = null) {
+    const states = getCalendarHeaderStates(popup, requireMonth);
+    if (states.length === 0) return null;
+
+    if (targetYear !== null) {
+      const exactMatch = states.find((s) =>
+        requireMonth ? s.year === targetYear && s.month === targetMonth : s.year === targetYear
+      );
+      if (exactMatch) return exactMatch;
+    }
+
+    return states[0];
+  }
+
+  async function navigateCalendarHeader(targetYear, targetMonth = null) {
+    const requireMonth = targetMonth !== null;
+    let lastYear = null;
+    let lastMonth = null;
+
+    for (let step = 0; step < 24; step++) {
+      const popup = findOpenCalendarPopup() || document.body;
+      const states = getCalendarHeaderStates(popup, requireMonth);
+      if (states.length === 0) return false;
+
+      const matched = states.find((s) =>
+        requireMonth ? s.year === targetYear && s.month === targetMonth : s.year === targetYear
+      );
+      if (matched) return true;
+
+      const targetTotal = targetYear * 12 + (targetMonth || 1);
+      const firstTotal = states[0].year * 12 + (states[0].month || 1);
+      const goingPrev = targetTotal < firstTotal;
+      const state = goingPrev ? states[0] : states[states.length - 1];
+      const stateTotal = state.year * 12 + (state.month || 1);
+
+      if (state.year === lastYear && state.month === lastMonth) {
+        return false;
+      }
+      lastYear = state.year;
+      lastMonth = state.month;
+
+      let headerRow = state.headerEl.parentElement;
+      for (let depth = 0; depth < 4 && headerRow && headerRow !== popup; depth++) {
+        if (headerRow.querySelectorAll('svg').length >= 2) break;
+        headerRow = headerRow.parentElement;
+      }
+
+      const svgs = headerRow
+        ? Array.from(headerRow.querySelectorAll('svg')).filter(isElementVisible)
+        : [];
+
+      const prevSvgs = svgs.filter((svg) =>
+        Boolean(svg.compareDocumentPosition(state.headerEl) & Node.DOCUMENT_POSITION_FOLLOWING)
+      );
+      const nextSvgs = svgs.filter((svg) =>
+        Boolean(state.headerEl.compareDocumentPosition(svg) & Node.DOCUMENT_POSITION_FOLLOWING)
+      );
+
+      let targetSvg = null;
+      if (goingPrev) {
+        if (requireMonth && stateTotal - targetTotal >= 12 && prevSvgs.length >= 2) {
+          targetSvg = prevSvgs[0];
+        } else {
+          targetSvg = prevSvgs[prevSvgs.length - 1] || null;
+        }
+      } else {
+        if (requireMonth && targetTotal - stateTotal >= 12 && nextSvgs.length >= 2) {
+          targetSvg = nextSvgs[nextSvgs.length - 1];
+        } else {
+          targetSvg = nextSvgs[0] || null;
+        }
+      }
+
+      if (!targetSvg || isCalendarCellDisabled(targetSvg)) {
+        return false;
+      }
+
+      humanClick(targetSvg);
+      await sleep(200);
+    }
+
+    return false;
+  }
+
+  function findCalendarPanelRoot(popup, requireMonth, targetYear, targetMonth) {
+    if (!targetYear) return popup;
+    const states = getCalendarHeaderStates(popup, requireMonth);
+    if (states.length <= 1) return popup;
+
+    const matchingState = states.find((s) =>
+      requireMonth ? s.year === targetYear && s.month === targetMonth : s.year === targetYear
+    );
+    if (!matchingState) return popup;
+
+    let cur = matchingState.headerEl.parentElement;
+    let best = popup;
+    while (cur && cur !== popup) {
+      const headersInside = getCalendarHeaderStates(cur, requireMonth);
+      if (headersInside.length > 1) {
+        break;
+      }
+      if (
+        cur.querySelector('.arco-picker-cell, [class*="picker-cell"]') ||
+        cur.textContent.includes('Mon')
+      ) {
+        best = cur;
+      }
+      cur = cur.parentElement;
+    }
+    return best;
+  }
+
+  function findDayCellStateInPopup(dayNumber, targetYear = null, targetMonth = null) {
     const dayStr = String(dayNumber);
     const popup = findOpenCalendarPopup() || document.body;
+    const scopeRoot = findCalendarPanelRoot(popup, true, targetYear, targetMonth);
 
     // 1. Prefer Arco Design's in-view cells (.arco-picker-cell-in-view)
     const inViewCells = Array.from(
-      popup.querySelectorAll('.arco-picker-cell-in-view, [class*="picker-cell-in-view"]')
+      scopeRoot.querySelectorAll('.arco-picker-cell-in-view, [class*="picker-cell-in-view"]')
     ).filter(isElementVisible);
 
     for (const cell of inViewCells) {
       const leaf = Array.from(cell.querySelectorAll('div')).find(
         (d) => d.children.length === 0 && d.textContent.trim() === dayStr
       );
-      if (leaf) return leaf;
-      if (cell.textContent.trim() === dayStr) return cell;
+      if (leaf) {
+        return {
+          found: true,
+          disabled: isCalendarCellDisabled(leaf),
+          element: leaf
+        };
+      }
+      if (cell.textContent.trim() === dayStr) {
+        return {
+          found: true,
+          disabled: isCalendarCellDisabled(cell),
+          element: cell
+        };
+      }
     }
 
-    // 2. Fallback: find leaf divs inside the calendar popup matching dayStr
-    const allCells = Array.from(popup.querySelectorAll('div > div > div')).filter(
-      (el) => isElementVisible(el) && el.children.length === 0 && el.textContent.trim() === dayStr
-    );
-    if (allCells.length === 0) return null;
-    return dayNumber <= 15 ? allCells[0] : allCells[allCells.length - 1];
+    // 2. Fallback only when no Arco in-view cells exist
+    if (inViewCells.length === 0) {
+      const allCells = Array.from(scopeRoot.querySelectorAll('div > div > div')).filter(
+        (el) => isElementVisible(el) && el.children.length === 0 && el.textContent.trim() === dayStr
+      );
+      if (allCells.length > 0) {
+        const picked = dayNumber <= 15 ? allCells[0] : allCells[allCells.length - 1];
+        return {
+          found: true,
+          disabled: isCalendarCellDisabled(picked),
+          element: picked
+        };
+      }
+    }
+
+    return { found: false, disabled: true, element: null };
   }
 
-  function findMonthCellInPopup(monthIndexZeroBased) {
+  function findMonthCellStateInPopup(monthIndexZeroBased, targetYear = null) {
     const monthLabel = MONTH_NAMES[monthIndexZeroBased];
-    if (!monthLabel) return null;
+    if (!monthLabel) return { found: false, disabled: true, element: null };
     const popup = findOpenCalendarPopup() || document.body;
+    const scopeRoot = findCalendarPanelRoot(popup, false, targetYear, null);
 
-    const match = Array.from(popup.querySelectorAll('div')).find(
+    const match = Array.from(scopeRoot.querySelectorAll('div')).find(
       (el) => isElementVisible(el) && el.children.length === 0 && el.textContent.trim() === monthLabel
     );
-    return match || null;
+    if (!match) {
+      return { found: false, disabled: true, element: null };
+    }
+    return {
+      found: true,
+      disabled: isCalendarCellDisabled(match),
+      element: match
+    };
   }
 
   async function selectCalendarPeriod(periodConfig, pageType) {
     const mode = periodConfig?.mode || 'day';
-    await openDatePickerPopup();
+    const popup = await openDatePickerPopup();
 
     if (mode === 'month') {
-      const [yyyyStr, mmStr] = (periodConfig.month || '').split('-');
+      const targetMonthLabel = periodConfig.month || '';
+      const [yyyyStr, mmStr] = targetMonthLabel.split('-');
       const targetYear = parseInt(yyyyStr, 10);
       const targetMonthIdx = parseInt(mmStr, 10) - 1;
       const monthName = MONTH_NAMES[targetMonthIdx] || mmStr;
@@ -363,46 +528,80 @@
       logStep(`Switching calendar to Month mode (${monthName} ${targetYear})...`);
       await switchCalendarModeTab('Month');
       if (!isNaN(targetYear)) {
-        await navigateCalendarHeader(targetYear, null);
+        const reached = await navigateCalendarHeader(targetYear, null);
+        if (!reached) {
+          throw new Error(`Platform do not have data for ${targetMonthLabel}`);
+        }
       }
 
-      const monthCell = await waitForSelector(() => findMonthCellInPopup(targetMonthIdx), 4000, 150);
-      if (!monthCell) {
-        throw new Error(`Could not find month "${monthName}" on calendar`);
+      const monthState = await waitForSelector(() => {
+        const s = findMonthCellStateInPopup(targetMonthIdx, targetYear);
+        return s.found ? s : null;
+      }, 2500, 100);
+
+      if (!monthState || !monthState.found || monthState.disabled) {
+        throw new Error(`Platform do not have data for ${targetMonthLabel}`);
       }
 
       logStep(`Clicking month "${monthName}"...`);
-      humanClick(monthCell);
-      await sleep(700);
+      humanClick(monthState.element);
+      await sleep(600);
     } else {
-      const [yyyyStr, mmStr, ddStr] = (periodConfig.date || '').split('-');
+      const targetDateLabel = periodConfig.date || '';
+      const [yyyyStr, mmStr, ddStr] = targetDateLabel.split('-');
       const targetYear = parseInt(yyyyStr, 10);
       const targetMonth = parseInt(mmStr, 10);
       const targetDay = parseInt(ddStr, 10);
 
-      logStep(`Selecting Single Day: ${periodConfig.date} (${pageType.toUpperCase()})...`);
-      await switchCalendarModeTab('Day');
-      if (!isNaN(targetYear) && !isNaN(targetMonth)) {
-        await navigateCalendarHeader(targetYear, targetMonth);
+      logStep(`Selecting Single Day: ${targetDateLabel} (${pageType.toUpperCase()})...`);
+      const datePickerContainer = document.getElementById('page-title-datepicker');
+      const datePickerCombinedText = [
+        datePickerContainer?.textContent || '',
+        ...Array.from(datePickerContainer?.querySelectorAll('input') || []).map((i) => i.value || '')
+      ].join(' ');
+      const isWeekOrMonthLabel = /\b(Week|Month)\s*:/.test(datePickerCombinedText);
+      const isDayOrPresetLabel = /\b(Day|Today|Last\s+\d+\s+days)\s*:/.test(datePickerCombinedText);
+      const isAlreadyDayMode =
+        !isWeekOrMonthLabel &&
+        isDayOrPresetLabel &&
+        Boolean(getCalendarHeaderState(popup, true));
+      if (!isAlreadyDayMode) {
+        await switchCalendarModeTab('Day');
       }
 
-      const dayCell1 = await waitForSelector(() => findDayCellInPopup(targetDay), 4000, 150);
-      if (!dayCell1) {
-        throw new Error(`Could not find day "${targetDay}" on calendar`);
+      if (!isNaN(targetYear) && !isNaN(targetMonth)) {
+        const reached = await navigateCalendarHeader(targetYear, targetMonth);
+        if (!reached) {
+          throw new Error(`Platform do not have data for ${targetDateLabel}`);
+        }
+      }
+
+      const dayState1 = await waitForSelector(() => {
+        const s = findDayCellStateInPopup(targetDay, targetYear, targetMonth);
+        return s.found ? s : null;
+      }, 2500, 100);
+
+      if (!dayState1 || !dayState1.found || dayState1.disabled) {
+        throw new Error(`Platform do not have data for ${targetDateLabel}`);
       }
 
       logStep(`Click #1 on day ${targetDay}...`);
-      humanClick(dayCell1);
-      await sleep(400);
+      humanClick(dayState1.element);
 
       // On Video -> Details, Day mode is a Date Range picker: click the same day a 2nd time!
       if (pageType === 'video') {
-        const dayCell2 = await waitForSelector(() => findDayCellInPopup(targetDay), 2500, 150);
-        if (dayCell2) {
+        await sleep(250);
+        const dayState2 = await waitForSelector(() => {
+          const s = findDayCellStateInPopup(targetDay, targetYear, targetMonth);
+          return s.found ? s : null;
+        }, 2000, 100);
+        if (dayState2 && dayState2.found && !dayState2.disabled) {
           logStep(`Click #2 on day ${targetDay} (Video range end)...`);
-          humanClick(dayCell2);
-          await sleep(600);
+          humanClick(dayState2.element);
+          await sleep(400);
         }
+      } else {
+        await sleep(350);
       }
     }
   }
@@ -588,58 +787,59 @@
       return { status: 'error', reason: 'Export button not found' };
     }
 
-    const isDisabled =
-      exportBtn.disabled ||
-      exportBtn.getAttribute('aria-disabled') === 'true' ||
-      exportBtn.classList.contains('arco-btn-disabled');
+    for (let attempt = 1; ; attempt++) {
+      if (hasNoAvailableData()) {
+        logStep(`[${reportKey}] No available data yet -> Skipped.`);
+        updateReportStatus(reportKey, 'empty', 'No data');
+        return { status: 'empty' };
+      }
 
-    if (isDisabled || hasNoAvailableData()) {
-      logStep(`[${reportKey}] Export button is disabled / No data -> Skipped.`);
-      updateReportStatus(reportKey, 'empty', 'No data');
-      return { status: 'empty' };
-    }
+      const currentBtn =
+        attempt === 1 ? exportBtn : await waitForSelector(findExportButton, 3000, 200);
+      if (!currentBtn) {
+        if (hasNoAvailableData()) {
+          logStep(`[${reportKey}] No available data yet -> Skipped.`);
+          updateReportStatus(reportKey, 'empty', 'No data');
+          return { status: 'empty' };
+        }
+        logStep(`[${reportKey}] Export button not found!`, true);
+        updateReportStatus(reportKey, 'error', 'No Export btn');
+        return { status: 'error', reason: 'Export button not found' };
+      }
 
-    // Attempt #1: Click Export button
-    const clickTime1 = Date.now();
-    logStep(`[${reportKey}] Clicking Export button (Attempt #1)...`);
-    updateReportStatus(reportKey, 'running', 'Exporting...');
-    await notifyExpectedDownload(reportKey, periodConfig);
-    triggerExportButtonClick(exportBtn);
+      const isDisabled =
+        currentBtn.disabled ||
+        currentBtn.getAttribute('aria-disabled') === 'true' ||
+        currentBtn.classList.contains('arco-btn-disabled');
 
-    const downloadedOnFirstTry = await waitForExportAttempt(clickTime1, 1, reportKey, 4500);
-    if (downloadedOnFirstTry) {
-      logStep(`[${reportKey}] Download started on Attempt #1!`);
-      updateReportStatus(reportKey, 'done', 'Downloaded ✓');
-      await sleep(1000);
-      return { status: 'done', attempts: 1 };
-    }
+      if (isDisabled || hasNoAvailableData()) {
+        logStep(`[${reportKey}] Export button is disabled / No data -> Skipped.`);
+        updateReportStatus(reportKey, 'empty', 'No data');
+        return { status: 'empty' };
+      }
 
-    if (hasNoAvailableData()) {
-      updateReportStatus(reportKey, 'empty', 'No data');
-      return { status: 'empty' };
-    }
-
-    // Attempt #2 (Platform fallback when 1st click on Export didn't queue a task or trigger download)
-    const retryBtn = findExportButton();
-    if (retryBtn && !retryBtn.disabled) {
-      const clickTime2 = Date.now();
-      logStep(`[${reportKey}] No download after 4.5s -> Clicking Export (Attempt #2)...`);
-      updateReportStatus(reportKey, 'running', 'Retry click...');
+      const clickTime = Date.now();
+      logStep(`[${reportKey}] Clicking Export button (Attempt #${attempt})...`);
+      updateReportStatus(
+        reportKey,
+        'running',
+        attempt === 1 ? 'Exporting...' : `Retry #${attempt}...`
+      );
       await notifyExpectedDownload(reportKey, periodConfig);
-      triggerExportButtonClick(retryBtn);
+      triggerExportButtonClick(currentBtn);
 
-      const downloadedOnSecondTry = await waitForExportAttempt(clickTime2, 2, reportKey, 5500);
-      if (downloadedOnSecondTry) {
-        logStep(`[${reportKey}] Download started on Attempt #2!`);
+      const downloaded = await waitForExportAttempt(clickTime, attempt, reportKey, 4500);
+      if (downloaded) {
+        logStep(`[${reportKey}] Download started on Attempt #${attempt}!`);
         updateReportStatus(reportKey, 'done', 'Downloaded ✓');
         await sleep(1000);
-        return { status: 'done', attempts: 2 };
+        return { status: 'done', attempts: attempt };
       }
-    }
 
-    logStep(`[${reportKey}] Export clicked (check browser download prompt if Save As is enabled).`);
-    updateReportStatus(reportKey, 'done', 'Clicked ✓');
-    return { status: 'done', attempts: 2 };
+      logStep(
+        `[${reportKey}] No download after 4.5s -> Clicking Export again (Attempt #${attempt + 1})...`
+      );
+    }
   }
 
   // --- Main Page Workflow (LIVE Details or Video Details) ---
