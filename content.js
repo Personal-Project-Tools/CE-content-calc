@@ -266,26 +266,51 @@
   }
 
   function isCalendarCellDisabled(el) {
+    if (el instanceof Element && !(el instanceof SVGElement)) {
+      const leafStyle = window.getComputedStyle(el);
+      if (parseFloat(leafStyle.opacity) < 0.5) {
+        return true;
+      }
+      const colorMatch = leafStyle.color.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\)/i);
+      if (colorMatch) {
+        const r = parseInt(colorMatch[1], 10);
+        const g = parseInt(colorMatch[2], 10);
+        const b = parseInt(colorMatch[3], 10);
+        const a = colorMatch[4] !== undefined ? parseFloat(colorMatch[4]) : 1;
+        if (a < 0.5) {
+          return true;
+        }
+        if (r >= 160 && r <= 240 && g >= 160 && g <= 240 && b >= 160 && b <= 240) {
+          return true;
+        }
+      }
+    }
+
     let cur = el;
     for (let depth = 0; cur && depth < 5; depth++) {
       if (cur instanceof Element) {
         const cls = typeof cur.className === 'string' ? cur.className : cur.getAttribute('class') || '';
+        const clsLower = cls.toLowerCase();
         const isCellOrIcon =
-          cls.includes('picker-cell') ||
-          cls.includes('picker-header-icon') ||
+          clsLower.includes('picker-cell') ||
+          clsLower.includes('picker-header-icon') ||
           cur.tagName === 'BUTTON';
         if (
-          cls.includes('disabled') ||
+          clsLower.includes('disabled') ||
           cur.hasAttribute('disabled') ||
           cur.getAttribute('aria-disabled') === 'true'
         ) {
           return true;
         }
         const style = window.getComputedStyle(cur);
-        if (style.cursor === 'not-allowed' || (isCellOrIcon && style.pointerEvents === 'none')) {
+        if (
+          style.cursor === 'not-allowed' ||
+          parseFloat(style.opacity) < 0.5 ||
+          (isCellOrIcon && style.pointerEvents === 'none')
+        ) {
           return true;
         }
-        if (cls.includes('picker-cell') || cls.includes('picker-header-icon')) {
+        if (clsLower.includes('picker-cell') || clsLower.includes('picker-header-icon')) {
           break;
         }
       }
@@ -514,11 +539,96 @@
     };
   }
 
+  function doesInputMatchSingleDay(rawVal, targetYear, targetMonth, targetDay) {
+    const val = (rawVal || '').trim();
+    if (!val) return false;
+
+    const monthName = MONTH_NAMES[targetMonth - 1];
+    const yyyy = String(targetYear);
+    const mStr = String(targetMonth);
+    const dStr = String(targetDay);
+
+    const isoRegex = new RegExp(`\\b${yyyy}[-/]0?${mStr}[-/]0?${dStr}\\b`);
+    const dmyRegex = new RegExp(`\\b0?${dStr}[-/]0?${mStr}[-/]${yyyy}\\b`);
+    const mdyRegex = new RegExp(`\\b0?${mStr}[-/]0?${dStr}[-/]${yyyy}\\b`);
+    if (isoRegex.test(val) || dmyRegex.test(val) || mdyRegex.test(val)) {
+      return true;
+    }
+
+    if (monthName) {
+      const hasMonthName = new RegExp(`\\b${monthName}\\b`, 'i').test(val);
+      const hasYear = new RegExp(`\\b${yyyy}\\b`).test(val);
+      const hasDay = new RegExp(`\\b0?${dStr}\\b`).test(val);
+      if (hasMonthName && hasYear && hasDay) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  function getDatePickerCombinedText(container) {
+    if (!container) return '';
+    return [
+      container.textContent || '',
+      ...Array.from(container.querySelectorAll('input')).map((i) => i.value || '')
+    ]
+      .join(' ')
+      .trim();
+  }
+
+  function isSingleDaySelectedOnPage(targetYear, targetMonth, targetDay) {
+    const container = document.getElementById('page-title-datepicker');
+    if (!container) return false;
+
+    const combinedText = getDatePickerCombinedText(container);
+    if (/\b(Last|Week|Month)\b/i.test(combinedText)) {
+      return false;
+    }
+
+    const inputs = Array.from(container.querySelectorAll('input')).filter(isElementVisible);
+    if (inputs.length === 0) return false;
+
+    return inputs.every((inp) =>
+      doesInputMatchSingleDay(inp.value, targetYear, targetMonth, targetDay)
+    );
+  }
+
+  function isMonthSelectionApplied(targetYear, targetMonthIdx, targetMonthLabel) {
+    if (!findOpenCalendarPopup()) {
+      return true;
+    }
+
+    const container = document.getElementById('page-title-datepicker');
+    if (!container) return false;
+    const combinedText = getDatePickerCombinedText(container);
+    if (/\b(Last|Week|Today|Day)\b/i.test(combinedText)) {
+      return false;
+    }
+
+    const monthName = MONTH_NAMES[targetMonthIdx] || '';
+    const yyyy = String(targetYear);
+    const inputsText = Array.from(container.querySelectorAll('input'))
+      .filter(isElementVisible)
+      .map((i) => i.value || '')
+      .join(' ');
+
+    if (targetMonthLabel && (inputsText.includes(targetMonthLabel) || combinedText.includes(targetMonthLabel))) {
+      return true;
+    }
+
+    return Boolean(
+      monthName &&
+        new RegExp(`\\b${monthName}\\b`, 'i').test(inputsText) &&
+        new RegExp(`\\b${yyyy}\\b`).test(inputsText)
+    );
+  }
+
   async function selectCalendarPeriod(periodConfig, pageType) {
     const mode = periodConfig?.mode || 'day';
-    const popup = await openDatePickerPopup();
 
     if (mode === 'month') {
+      const popup = await openDatePickerPopup();
       const targetMonthLabel = periodConfig.month || '';
       const [yyyyStr, mmStr] = targetMonthLabel.split('-');
       const targetYear = parseInt(yyyyStr, 10);
@@ -545,7 +655,17 @@
 
       logStep(`Clicking month "${monthName}"...`);
       humanClick(monthState.element);
-      await sleep(600);
+      await sleep(300);
+
+      const monthVerified = await waitForSelector(
+        () => isMonthSelectionApplied(targetYear, targetMonthIdx, targetMonthLabel),
+        1500,
+        100
+      );
+      if (!monthVerified) {
+        throw new Error(`Platform do not have data for ${targetMonthLabel}`);
+      }
+      await sleep(300);
     } else {
       const targetDateLabel = periodConfig.date || '';
       const [yyyyStr, mmStr, ddStr] = targetDateLabel.split('-');
@@ -553,27 +673,31 @@
       const targetMonth = parseInt(mmStr, 10);
       const targetDay = parseInt(ddStr, 10);
 
+      if (isNaN(targetYear) || isNaN(targetMonth) || isNaN(targetDay)) {
+        throw new Error(`Platform do not have data for ${targetDateLabel}`);
+      }
+
+      const containerBefore = document.getElementById('page-title-datepicker');
+      const combinedBefore = getDatePickerCombinedText(containerBefore);
+      if (/\bDay\s*:/.test(combinedBefore) && isSingleDaySelectedOnPage(targetYear, targetMonth, targetDay)) {
+        logStep(`Single Day ${targetDateLabel} is already selected on page.`);
+        return;
+      }
+
+      const popup = await openDatePickerPopup();
       logStep(`Selecting Single Day: ${targetDateLabel} (${pageType.toUpperCase()})...`);
-      const datePickerContainer = document.getElementById('page-title-datepicker');
-      const datePickerCombinedText = [
-        datePickerContainer?.textContent || '',
-        ...Array.from(datePickerContainer?.querySelectorAll('input') || []).map((i) => i.value || '')
-      ].join(' ');
-      const isWeekOrMonthLabel = /\b(Week|Month)\s*:/.test(datePickerCombinedText);
-      const isDayOrPresetLabel = /\b(Day|Today|Last\s+\d+\s+days)\s*:/.test(datePickerCombinedText);
-      const isAlreadyDayMode =
-        !isWeekOrMonthLabel &&
-        isDayOrPresetLabel &&
+      const combinedNow = getDatePickerCombinedText(document.getElementById('page-title-datepicker'));
+      const isExplicitDayMode =
+        /\bDay\s*:/.test(combinedNow) &&
+        !/\b(Week|Month|Last)\b/i.test(combinedNow) &&
         Boolean(getCalendarHeaderState(popup, true));
-      if (!isAlreadyDayMode) {
+      if (!isExplicitDayMode) {
         await switchCalendarModeTab('Day');
       }
 
-      if (!isNaN(targetYear) && !isNaN(targetMonth)) {
-        const reached = await navigateCalendarHeader(targetYear, targetMonth);
-        if (!reached) {
-          throw new Error(`Platform do not have data for ${targetDateLabel}`);
-        }
+      const reached = await navigateCalendarHeader(targetYear, targetMonth);
+      if (!reached) {
+        throw new Error(`Platform do not have data for ${targetDateLabel}`);
       }
 
       const dayState1 = await waitForSelector(() => {
@@ -595,14 +719,22 @@
           const s = findDayCellStateInPopup(targetDay, targetYear, targetMonth);
           return s.found ? s : null;
         }, 2000, 100);
-        if (dayState2 && dayState2.found && !dayState2.disabled) {
-          logStep(`Click #2 on day ${targetDay} (Video range end)...`);
-          humanClick(dayState2.element);
-          await sleep(400);
+        if (!dayState2 || !dayState2.found || dayState2.disabled) {
+          throw new Error(`Platform do not have data for ${targetDateLabel}`);
         }
-      } else {
-        await sleep(350);
+        logStep(`Click #2 on day ${targetDay} (Video range end)...`);
+        humanClick(dayState2.element);
       }
+
+      const verified = await waitForSelector(
+        () => isSingleDaySelectedOnPage(targetYear, targetMonth, targetDay),
+        1500,
+        100
+      );
+      if (!verified) {
+        throw new Error(`Platform do not have data for ${targetDateLabel}`);
+      }
+      await sleep(300);
     }
   }
 
