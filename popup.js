@@ -105,8 +105,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const shopName = document.getElementById('shop-name');
   const formattedSellerId = document.getElementById('formatted-seller-id');
   const regionParamBadge = document.getElementById('region-param-badge');
-  const btnGoLiveDetails = document.getElementById('btn-go-live-details');
-  const btnGoVideoDetails = document.getElementById('btn-go-video-details');
 
   const modeBtnDay = document.getElementById('mode-btn-day');
   const modeBtnMonth = document.getElementById('mode-btn-month');
@@ -114,8 +112,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const fieldMonthWrapper = document.getElementById('field-month-wrapper');
   const inputSingleDate = document.getElementById('input-single-date');
   const inputTargetMonth = document.getElementById('input-target-month');
-  const btnRunAllReports = document.getElementById('btn-run-all-reports');
-  const btnRunCurrentPage = document.getElementById('btn-run-current-page');
+
+  const btnExportAll = document.getElementById('btn-export-all');
+  const btnExportLive = document.getElementById('btn-export-live');
+  const btnExportVideo = document.getElementById('btn-export-video');
   const workflowLogBox = document.getElementById('workflow-log-box');
 
   let currentReportUrls = null;
@@ -125,10 +125,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!workflowLogBox) return;
     if (!logObj || !logObj.text) {
       workflowLogBox.classList.add('hidden');
+      workflowLogBox.classList.remove('log-error', 'log-success');
       return;
     }
     workflowLogBox.classList.remove('hidden');
     workflowLogBox.classList.toggle('log-error', Boolean(logObj.isError));
+    workflowLogBox.classList.toggle('log-success', Boolean(logObj.isSuccess));
     workflowLogBox.textContent = logObj.text;
   }
 
@@ -140,37 +142,33 @@ document.addEventListener('DOMContentLoaded', () => {
     };
   }
 
-  function renderChecklistStatuses(statuses = {}, isRunning = false) {
-    const items = document.querySelectorAll('#report-checklist .checklist-item');
-    items.forEach((item) => {
-      const key = item.getAttribute('data-report');
-      const info = statuses[key];
-      const statusSpan = item.querySelector('.check-status');
-      if (!info) {
-        item.removeAttribute('data-status');
-        if (statusSpan) statusSpan.textContent = 'Pending';
-        return;
-      }
-      item.setAttribute('data-status', info.status || 'pending');
-      if (statusSpan) {
-        statusSpan.textContent = info.message || info.status || 'Pending';
-      }
-    });
+  function renderExportButtonsState(runningScope = false) {
+    const isRunning = Boolean(runningScope);
+    const activeScope = typeof runningScope === 'string' ? runningScope : null;
 
-    if (btnRunAllReports) {
-      btnRunAllReports.disabled = Boolean(isRunning);
-      btnRunAllReports.textContent = isRunning
-        ? '⏳ Exporting in Background...'
-        : '▶ Auto Export All 4 Reports (Background)';
+    if (btnExportAll) {
+      btnExportAll.disabled = isRunning;
+      btnExportAll.textContent =
+        isRunning && activeScope === 'all'
+          ? '⏳ Exporting All 4 Reports...'
+          : '▶ Auto Export All 4 Reports';
+    }
+    if (btnExportLive) {
+      btnExportLive.disabled = isRunning;
+      btnExportLive.textContent =
+        isRunning && activeScope === 'live' ? '⏳ Exporting LIVE...' : 'Export LIVE Reports';
+    }
+    if (btnExportVideo) {
+      btnExportVideo.disabled = isRunning;
+      btnExportVideo.textContent =
+        isRunning && activeScope === 'video' ? '⏳ Exporting Video...' : 'Export Video Reports';
     }
   }
 
-  function loadChecklistStatuses() {
-    chrome.storage.local.get(['ttk_report_statuses', 'ttk_workflow_running', 'ttk_workflow_log'], (res) => {
-      renderChecklistStatuses(res.ttk_report_statuses || {}, res.ttk_workflow_running);
-      if (res.ttk_workflow_log) {
-        renderWorkflowLog(res.ttk_workflow_log);
-      }
+  function loadWorkflowState() {
+    chrome.storage.local.get(['ttk_workflow_running', 'ttk_workflow_log'], (res) => {
+      renderExportButtonsState(res.ttk_workflow_running || false);
+      renderWorkflowLog(res.ttk_workflow_log || null);
     });
   }
 
@@ -254,11 +252,33 @@ document.addEventListener('DOMContentLoaded', () => {
   if (inputSingleDate) inputSingleDate.addEventListener('change', savePeriodConfig);
   if (inputTargetMonth) inputTargetMonth.addEventListener('change', savePeriodConfig);
   loadStoredPeriodConfig();
-  loadChecklistStatuses();
+  loadWorkflowState();
 
   // Verify background service worker is up-to-date and downloads.onDeterminingFilename is active
+  const EXPECTED_BG_VERSION = '2.1.0';
   chrome.runtime.sendMessage({ action: 'CHECK_BACKGROUND_READY' }, (res) => {
-    if (chrome.runtime.lastError || !res || !res.ok || !res.hasDownloadsOnDetermining) {
+    if (chrome.runtime.lastError || !res || !res.ok) {
+      renderWorkflowLog({
+        text: '⚠️ Please click Reload (🔄) on chrome://extensions to activate Reports/ folder routing.',
+        isError: true
+      });
+      return;
+    }
+
+    if (res.version !== EXPECTED_BG_VERSION) {
+      if (localStorage.getItem('ttk_bg_reload_v') !== EXPECTED_BG_VERSION) {
+        localStorage.setItem('ttk_bg_reload_v', EXPECTED_BG_VERSION);
+        chrome.runtime.reload();
+        return;
+      }
+      renderWorkflowLog({
+        text: '⚠️ Background service worker is outdated. Please click Reload (🔄) on chrome://extensions.',
+        isError: true
+      });
+      return;
+    }
+
+    if (!res.hasDownloadsOnDetermining) {
       renderWorkflowLog({
         text: '⚠️ Please click Reload (🔄) on chrome://extensions to activate Reports/ folder routing.',
         isError: true
@@ -280,18 +300,6 @@ document.addEventListener('DOMContentLoaded', () => {
       live_details: `${origin}/compass/live-analysis/live-details?shop_region=${encodeURIComponent(region)}`,
       video_details: `${origin}/compass/video-analytics/video-details?platform_data_source=shop&shop_region=${encodeURIComponent(region)}`
     };
-  }
-
-  function navigateActiveTab(targetUrl) {
-    if (!targetUrl) return;
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      const activeTab = tabs[0];
-      if (activeTab?.id) {
-        chrome.tabs.update(activeTab.id, { url: targetUrl });
-      } else {
-        chrome.tabs.create({ url: targetUrl });
-      }
-    });
   }
 
   const btnRefresh = document.getElementById('btn-refresh');
@@ -350,13 +358,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     currentReportUrls =
       shop.report_urls || buildFallbackReportUrls(country, payload.endpoint_url);
-
-    if (btnGoLiveDetails) {
-      btnGoLiveDetails.title = currentReportUrls.live_details;
-    }
-    if (btnGoVideoDetails) {
-      btnGoVideoDetails.title = currentReportUrls.video_details;
-    }
   }
 
   function showEmptyState() {
@@ -390,102 +391,49 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.tabs.create({ url: 'https://seller.tiktok.com' });
   });
 
-  // Navigate to LIVE -> Details
-  if (btnGoLiveDetails) {
-    btnGoLiveDetails.addEventListener('click', () => {
-      if (currentReportUrls?.live_details) {
-        navigateActiveTab(currentReportUrls.live_details);
-      }
+  function startExportWorkflow(scope) {
+    if (!currentReportUrls) return;
+    savePeriodConfig();
+    const periodConfig = getPeriodConfigFromInputs();
+
+    renderExportButtonsState(scope);
+    renderWorkflowLog({ text: '⏳ Starting background export tab...' });
+
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const activeTab = tabs[0];
+      chrome.runtime.sendMessage(
+        {
+          action: 'START_FULL_WORKFLOW',
+          scope,
+          tabId: activeTab?.id || null,
+          reportUrls: currentReportUrls,
+          periodConfig
+        },
+        (res) => {
+          const lastErr = chrome.runtime.lastError;
+          if (lastErr || !res || !res.ok) {
+            renderExportButtonsState(false);
+            renderWorkflowLog({
+              text:
+                lastErr?.message ||
+                res?.error ||
+                'Failed to start background export. Please click Reload on chrome://extensions.',
+              isError: true
+            });
+          }
+        }
+      );
     });
   }
 
-  // Navigate to Video -> Details
-  if (btnGoVideoDetails) {
-    btnGoVideoDetails.addEventListener('click', () => {
-      if (currentReportUrls?.video_details) {
-        navigateActiveTab(currentReportUrls.video_details);
-      }
-    });
+  if (btnExportAll) {
+    btnExportAll.addEventListener('click', () => startExportWorkflow('all'));
   }
-
-  // Run Full 4-Report Auto Export Workflow (LIVE Details -> Video Details)
-  if (btnRunAllReports) {
-    btnRunAllReports.addEventListener('click', () => {
-      if (!currentReportUrls) return;
-      savePeriodConfig();
-      const periodConfig = getPeriodConfigFromInputs();
-
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        const activeTab = tabs[0];
-        if (!activeTab?.id) return;
-
-        renderWorkflowLog({ text: 'Starting silent background export...', isError: false });
-
-        chrome.runtime.sendMessage(
-          {
-            action: 'START_FULL_WORKFLOW',
-            tabId: activeTab.id,
-            reportUrls: currentReportUrls,
-            periodConfig
-          },
-          () => {
-            void chrome.runtime.lastError;
-          }
-        );
-      });
-    });
+  if (btnExportLive) {
+    btnExportLive.addEventListener('click', () => startExportWorkflow('live'));
   }
-
-  // Run Workflow on Current Open Details Page Only (2 Reports)
-  if (btnRunCurrentPage) {
-    btnRunCurrentPage.addEventListener('click', () => {
-      savePeriodConfig();
-      const periodConfig = getPeriodConfigFromInputs();
-
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        const activeTab = tabs[0];
-        if (!activeTab?.id) return;
-
-        btnRunCurrentPage.disabled = true;
-        btnRunCurrentPage.textContent = '⏳ Running Current Page...';
-        renderWorkflowLog({ text: 'Starting workflow on current tab...', isError: false });
-
-        const finish = (res) => {
-          btnRunCurrentPage.disabled = false;
-          btnRunCurrentPage.textContent = 'Run Current Page Only (2 Reports)';
-          if (res && res.ok === false && res.error) {
-            renderWorkflowLog({ text: res.error, isError: true });
-          }
-          loadChecklistStatuses();
-        };
-
-        const sendRun = (onDone) => {
-          chrome.tabs.sendMessage(activeTab.id, { action: 'RUN_PAGE_WORKFLOW', periodConfig }, (res) => {
-            if (chrome.runtime.lastError) {
-              onDone(null, chrome.runtime.lastError.message);
-            } else {
-              onDone(res);
-            }
-          });
-        };
-
-        // Try direct message to the tab; if content script is missing, inject it and retry.
-        chrome.tabs.sendMessage(activeTab.id, { action: 'PING' }, () => {
-          if (!chrome.runtime.lastError) {
-            sendRun((res, err) => finish(err ? { ok: false, error: err } : res));
-            return;
-          }
-          renderWorkflowLog({ text: 'Content script missing in tab -> injecting...', isError: false });
-          chrome.scripting.executeScript({ target: { tabId: activeTab.id }, files: ['content.js'] }, () => {
-            if (chrome.runtime.lastError) {
-              finish({ ok: false, error: `Cannot inject into this tab: ${chrome.runtime.lastError.message}` });
-              return;
-            }
-            setTimeout(() => sendRun((res, err) => finish(err ? { ok: false, error: err } : res)), 400);
-          });
-        });
-      });
-    });
+  if (btnExportVideo) {
+    btnExportVideo.addEventListener('click', () => startExportWorkflow('video'));
   }
 
   // Listen for storage changes in real time
@@ -494,8 +442,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (changes.ttk_seller_payload) {
         loadStoredData();
       }
-      if (changes.ttk_report_statuses || changes.ttk_workflow_running || changes.ttk_workflow_log) {
-        loadChecklistStatuses();
+      if (changes.ttk_workflow_running || changes.ttk_workflow_log) {
+        loadWorkflowState();
       }
     }
   });

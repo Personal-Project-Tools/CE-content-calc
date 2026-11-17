@@ -106,56 +106,21 @@
           </div>
 
           <div class="routes-header routes-subheader">
-            <span class="routes-title">2. Report Sources (Max 4 Reports)</span>
+            <span class="routes-title">2. Export Reports</span>
           </div>
-
-          <div class="routes-actions">
-            <button type="button" id="btn-go-live-details" class="btn btn-route" title="Navigate active tab to LIVE Details">
-              <span class="route-info">
-                <span class="route-name">LIVE &rarr; Details</span>
-                <span class="route-sub">Linked + Affiliate (2)</span>
-              </span>
-              <span class="route-arrow">&rarr;</span>
-            </button>
-            <button type="button" id="btn-go-video-details" class="btn btn-route" title="Navigate active tab to Video Details">
-              <span class="route-info">
-                <span class="route-name">Video &rarr; Details</span>
-                <span class="route-sub">Linked + Affiliate (2)</span>
-              </span>
-              <span class="route-arrow">&rarr;</span>
-            </button>
-          </div>
-
-          <ul class="report-checklist" id="report-checklist" aria-label="Target reports">
-            <li class="checklist-item" data-report="live_linked">
-              <span class="check-dot"></span>
-              <span class="check-label">LIVE &middot; Linked accounts</span>
-              <span class="check-status">Pending</span>
-            </li>
-            <li class="checklist-item" data-report="live_affiliate">
-              <span class="check-dot"></span>
-              <span class="check-label">LIVE &middot; Affiliate accounts</span>
-              <span class="check-status">Pending</span>
-            </li>
-            <li class="checklist-item" data-report="video_linked">
-              <span class="check-dot"></span>
-              <span class="check-label">Video &middot; Linked accounts</span>
-              <span class="check-status">Pending</span>
-            </li>
-            <li class="checklist-item" data-report="video_affiliate">
-              <span class="check-dot"></span>
-              <span class="check-label">Video &middot; Affiliate accounts</span>
-              <span class="check-status">Pending</span>
-            </li>
-          </ul>
 
           <div class="workflow-actions">
-            <button type="button" id="btn-run-all-reports" class="btn btn-primary" title="Runs silently in a hidden background tab without leaving your current page">
-              &#9654; Auto Export All 4 Reports (Background)
+            <button type="button" id="btn-export-all" class="btn btn-primary" title="Export all LIVE and Video reports (up to 4 reports)">
+              &#9654; Auto Export All 4 Reports
             </button>
-            <button type="button" id="btn-run-current-page" class="btn btn-secondary btn-full" title="Run date selection & export on current open Details tab">
-              Run Current Page Only (2 Reports)
-            </button>
+            <div class="routes-actions">
+              <button type="button" id="btn-export-live" class="btn btn-secondary btn-full" title="Export LIVE Details reports (Linked + Affiliate)">
+                Export LIVE Reports
+              </button>
+              <button type="button" id="btn-export-video" class="btn btn-secondary btn-full" title="Export Video Details reports (Linked + Affiliate)">
+                Export Video Reports
+              </button>
+            </div>
           </div>
 
           <div id="workflow-log-box" class="workflow-log-box hidden" role="status" aria-live="polite"></div>

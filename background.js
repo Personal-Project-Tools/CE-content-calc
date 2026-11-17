@@ -4,6 +4,8 @@
  * and orchestrates the 4-report workflow across LIVE -> Details and Video -> Details pages.
  */
 
+const BG_VERSION = '2.1.0';
+
 const REPORT_PREFIX_MAP = {
   live_linked: '1_LIVE_Linked',
   live_affiliate: '2_LIVE_Affiliate',
@@ -62,7 +64,8 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
 });
 
 chrome.runtime.onInstalled.addListener(() => {
-  console.log('[TikTok Extension] Extension installed successfully.');
+  console.log(`[TikTok Extension] Extension installed/reloaded (v${BG_VERSION}).`);
+  chrome.storage.local.set({ ttk_workflow_running: false });
   hydrateCaches();
 });
 
@@ -147,7 +150,6 @@ function resolveDownloadSuggestion(downloadItem, suggest) {
 
   const relativePath = `CE-Reports/${sellerId}_${periodLabel}/${reportPrefix}${ext}`;
   suggest({ filename: relativePath, conflictAction: 'overwrite' });
-  saveWorkflowLog(`Saved to Reports/${sellerId}_${periodLabel}/${reportPrefix}${ext}`);
 }
 
 // Route TikTok reports through the Downloads/CE-Reports junction into repo Reports/
@@ -189,11 +191,13 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function saveWorkflowLog(text, isError = false) {
+function saveWorkflowLog(text, status = 'info') {
   chrome.storage.local.set({
     ttk_workflow_log: {
       text,
-      isError,
+      status,
+      isError: status === 'error',
+      isSuccess: status === 'success',
       timestamp: Date.now()
     }
   });
@@ -242,12 +246,8 @@ function waitForTabComplete(tabId, timeoutMs = 25000) {
  * and sends a message to content.js.
  */
 async function sendMessageWithAutoInject(tabId, payload) {
-  saveWorkflowLog('Background: sending command to tab...');
   return new Promise((resolve) => {
     chrome.tabs.sendMessage(tabId, payload, async (response) => {
-      if (chrome.runtime.lastError) {
-        saveWorkflowLog(`Background: tab not reachable (${chrome.runtime.lastError.message}) -> injecting content.js...`, true);
-      }
       if (chrome.runtime.lastError) {
         // Content script not loaded yet -> inject content.js dynamically and retry
         try {
@@ -291,22 +291,21 @@ async function waitAndRunPageWorkflow(tabId, periodConfig) {
 }
 
 async function navigateAndRunPageWorkflow(tabId, targetUrl, periodConfig) {
-  saveWorkflowLog(`Loading ${targetUrl.includes('live-details') ? 'LIVE Details' : 'Video Details'} in background...`);
   await chrome.tabs.update(tabId, { url: targetUrl });
   return waitAndRunPageWorkflow(tabId, periodConfig);
 }
 
-async function runFullFourReportWorkflow(sourceTabId, reportUrls, periodConfig) {
-  const initialStatuses = {
-    live_linked: { status: 'pending', message: 'Queued' },
-    live_affiliate: { status: 'pending', message: 'Queued' },
-    video_linked: { status: 'pending', message: 'Queued' },
-    video_affiliate: { status: 'pending', message: 'Queued' }
-  };
-  await chrome.storage.local.set({
-    ttk_report_statuses: initialStatuses,
-    ttk_workflow_running: true
-  });
+const EXPORT_SCOPE_LABELS = {
+  all: 'All 4 Reports',
+  live: 'LIVE Reports',
+  video: 'Video Reports'
+};
+
+async function runBackgroundExportWorkflow(sourceTabId, reportUrls, periodConfig, scope = 'all') {
+  const normalizedScope = scope === 'live' || scope === 'video' ? scope : 'all';
+
+  await chrome.storage.local.remove(['ttk_workflow_log']);
+  await chrome.storage.local.set({ ttk_workflow_running: normalizedScope });
 
   let workerTabId = null;
 
@@ -321,9 +320,11 @@ async function runFullFourReportWorkflow(sourceTabId, reportUrls, periodConfig) 
       }
     }
 
-    saveWorkflowLog('Opening silent background tab for LIVE Details...');
+    const initialUrl =
+      normalizedScope === 'video' ? reportUrls.video_details : reportUrls.live_details;
+
     const createOpts = {
-      url: reportUrls.live_details,
+      url: initialUrl,
       active: false,
       pinned: true
     };
@@ -337,19 +338,43 @@ async function runFullFourReportWorkflow(sourceTabId, reportUrls, periodConfig) 
       throw new Error('Failed to create background worker tab');
     }
 
-    // Phase 1: LIVE -> Details (2 reports: Linked + Affiliate)
-    const liveRes = await waitAndRunPageWorkflow(workerTabId, periodConfig);
+    let liveRes = null;
+    let videoRes = null;
 
-    await sleep(1200);
+    if (normalizedScope === 'live') {
+      saveWorkflowLog('⏳ Exporting LIVE Reports in background tab...', 'info');
+      liveRes = await waitAndRunPageWorkflow(workerTabId, periodConfig);
+      if (liveRes && !liveRes.ok) {
+        throw new Error(liveRes.error || 'LIVE export failed');
+      }
+      await sleep(2000);
+    } else if (normalizedScope === 'video') {
+      saveWorkflowLog('⏳ Exporting Video Reports in background tab...', 'info');
+      videoRes = await waitAndRunPageWorkflow(workerTabId, periodConfig);
+      if (videoRes && !videoRes.ok) {
+        throw new Error(videoRes.error || 'Video export failed');
+      }
+      await sleep(3000);
+    } else {
+      saveWorkflowLog('⏳ Exporting LIVE Reports in background tab...', 'info');
+      liveRes = await waitAndRunPageWorkflow(workerTabId, periodConfig);
+      if (liveRes && !liveRes.ok) {
+        throw new Error(liveRes.error || 'LIVE export failed');
+      }
+      await sleep(1200);
+      saveWorkflowLog('⏳ Exporting Video Reports in background tab...', 'info');
+      videoRes = await navigateAndRunPageWorkflow(workerTabId, reportUrls.video_details, periodConfig);
+      if (videoRes && !videoRes.ok) {
+        throw new Error(videoRes.error || 'Video export failed');
+      }
+      await sleep(3000);
+    }
 
-    // Phase 2: Video -> Details (2 reports: Linked + Affiliate, re-selects Date/Month)
-    const videoRes = await navigateAndRunPageWorkflow(workerTabId, reportUrls.video_details, periodConfig);
-
-    await sleep(3000);
-    saveWorkflowLog('All 4 background export steps finished!');
-    return { ok: true, liveRes, videoRes };
+    const label = EXPORT_SCOPE_LABELS[normalizedScope];
+    saveWorkflowLog(`✓ Completed: ${label} exported!`, 'success');
+    return { ok: true, scope: normalizedScope, liveRes, videoRes };
   } catch (err) {
-    saveWorkflowLog(err.message || String(err), true);
+    saveWorkflowLog(err.message || String(err), 'error');
     return { ok: false, error: err.message || String(err) };
   } finally {
     if (workerTabId) {
@@ -391,6 +416,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'CHECK_BACKGROUND_READY') {
     sendResponse({
       ok: true,
+      version: BG_VERSION,
       hasDownloadsOnDetermining: Boolean(chrome.downloads && chrome.downloads.onDeterminingFilename)
     });
     return false;
@@ -418,7 +444,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === 'WORKFLOW_LOG') {
-    saveWorkflowLog(message.text, message.isError);
+    saveWorkflowLog(message.text, message.isError ? 'error' : 'info');
     sendResponse({ ok: true });
     return true;
   }
@@ -434,12 +460,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (message.action === 'START_FULL_WORKFLOW') {
-    const { tabId, reportUrls, periodConfig } = message;
-    runFullFourReportWorkflow(tabId, reportUrls, periodConfig).then((res) => {
-      sendResponse(res);
-    });
-    return true;
+  if (message.action === 'START_EXPORT_WORKFLOW' || message.action === 'START_FULL_WORKFLOW') {
+    const { tabId, reportUrls, periodConfig, scope } = message;
+    runBackgroundExportWorkflow(tabId, reportUrls, periodConfig, scope || 'all');
+    sendResponse({ ok: true, started: true, version: BG_VERSION });
+    return false;
   }
 
   if (message.action === 'BACKGROUND_SLEEP') {

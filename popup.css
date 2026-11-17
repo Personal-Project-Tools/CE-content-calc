@@ -428,80 +428,11 @@ body {
   border-color: var(--accent-blue);
 }
 
-.report-checklist {
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-top: 2px;
-  padding-top: 8px;
-  border-top: 1px dashed var(--border-color);
-}
-
-.checklist-item {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 11px;
-  padding: 3px 6px;
-  border-radius: 4px;
-  background-color: rgba(255, 255, 255, 0.02);
-}
-
-.check-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background-color: var(--text-muted);
-  flex-shrink: 0;
-}
-
-.check-label {
-  color: var(--text-secondary);
-  flex: 1;
-}
-
-.check-status {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-muted);
-}
-
-.checklist-item[data-status="running"] .check-dot {
-  background-color: var(--accent-yellow);
-  box-shadow: 0 0 6px var(--accent-yellow);
-}
-.checklist-item[data-status="running"] .check-status {
-  color: var(--accent-yellow);
-}
-
-.checklist-item[data-status="done"] .check-dot {
-  background-color: var(--accent-green);
-  box-shadow: 0 0 6px var(--accent-green);
-}
-.checklist-item[data-status="done"] .check-status {
-  color: var(--accent-green);
-}
-
-.checklist-item[data-status="empty"] .check-dot {
-  background-color: var(--accent-blue);
-}
-.checklist-item[data-status="empty"] .check-status {
-  color: var(--accent-blue);
-}
-
-.checklist-item[data-status="error"] .check-dot {
-  background-color: #ef4444;
-}
-.checklist-item[data-status="error"] .check-status {
-  color: #ef4444;
-}
-
 .workflow-actions {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-top: 4px;
+  gap: 8px;
+  margin-top: 2px;
 }
 
 .btn-full {
@@ -526,6 +457,12 @@ body {
   word-break: break-word;
 }
 
+.workflow-log-box.log-success {
+  border-left-color: var(--accent-green);
+  color: var(--accent-green);
+  background-color: rgba(34, 197, 94, 0.1);
+}
+
 .workflow-log-box.log-error {
   border-left-color: #ef4444;
   color: #fca5a5;
@@ -536,52 +473,6 @@ body {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
-}
-
-.btn-route {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  background-color: rgba(255, 255, 255, 0.03);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  padding: 8px 10px;
-  text-align: left;
-  color: var(--text-primary);
-  width: 100%;
-}
-
-.btn-route:hover {
-  background-color: var(--bg-card-hover);
-  border-color: var(--accent-blue);
-}
-
-.route-info {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.route-name {
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1.2;
-}
-
-.route-sub {
-  font-size: 10px;
-  color: var(--text-muted);
-}
-
-.route-arrow {
-  font-size: 13px;
-  color: var(--text-secondary);
-  transition: transform 0.15s ease;
-}
-
-.btn-route:hover .route-arrow {
-  transform: translateX(2px);
-  color: var(--accent-blue);
 }
 
 /* Calculator Preview Box */

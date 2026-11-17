@@ -63,13 +63,6 @@
 
   function logStep(text, isError = false) {
     console.log(`[TikTok Extension] ${isError ? 'ERROR: ' : ''}${text}`);
-    try {
-      chrome.storage.local.set({
-        ttk_workflow_log: { text, isError, timestamp: Date.now() }
-      });
-    } catch (e) {
-      // extension context invalidated
-    }
   }
 
   function isElementVisible(el) {
@@ -164,15 +157,7 @@
   }
 
   function updateReportStatus(reportKey, status, message = '') {
-    try {
-      chrome.storage.local.get(['ttk_report_statuses'], (res) => {
-        const statuses = res.ttk_report_statuses || {};
-        statuses[reportKey] = { status, message, updatedAt: Date.now() };
-        chrome.storage.local.set({ ttk_report_statuses: statuses });
-      });
-    } catch (e) {
-      // extension context invalidated
-    }
+    console.debug(`[TikTok Extension] [${reportKey}] ${status}${message ? `: ${message}` : ''}`);
   }
 
   // --- Step 1: Open & Select Date/Month on #page-title-datepicker ---
