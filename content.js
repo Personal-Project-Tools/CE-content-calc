@@ -620,10 +620,100 @@
     await sleep(700);
   }
 
+  const EMPTY_DATA_PHRASES = [
+    'no available data yet',
+    'no available data',
+    'no data available',
+    'no data yet',
+    'no results found',
+    'tiada data'
+  ];
+
+  const EMPTY_DATA_LEAF_REGEX =
+    /^(no available data( yet)?|no data( available| yet)?|no record(s)?( found)?|no result(s)?( found)?|tiada data)$/i;
+
   function hasNoAvailableData() {
     const mainEl = document.getElementById('main') || document.body;
-    const text = mainEl.innerText || '';
-    return text.includes('No available data yet');
+
+    // 1. Check both textContent (guaranteed in background tabs) and innerText
+    const combinedText = `${mainEl.innerText || ''}\n${mainEl.textContent || ''}`.toLowerCase();
+    if (EMPTY_DATA_PHRASES.some((phrase) => combinedText.includes(phrase))) {
+      return true;
+    }
+
+    // 2. Check visible Arco / empty-state containers
+    const emptyContainers = Array.from(
+      mainEl.querySelectorAll(
+        '.arco-empty, [class*="arco-empty"], .arco-table-empty, [class*="empty-state"], [class*="emptyContainer"]'
+      )
+    ).filter(isElementVisible);
+    if (emptyContainers.length > 0) {
+      return true;
+    }
+
+    // 3. Check visible leaf elements inside #main
+    const leafNodes = Array.from(mainEl.querySelectorAll('div, span, p'));
+    for (const el of leafNodes) {
+      if (el.children.length !== 0 || !isElementVisible(el)) continue;
+      const trimmed = (el.textContent || '').trim();
+      if (trimmed && EMPTY_DATA_LEAF_REGEX.test(trimmed)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  function isExportButtonDisabled(btn) {
+    if (!btn) return true;
+
+    let cur = btn;
+    for (let depth = 0; cur && depth < 3; depth++) {
+      if (cur instanceof Element) {
+        const cls = typeof cur.className === 'string' ? cur.className : cur.getAttribute('class') || '';
+        const clsLower = cls.toLowerCase();
+        const style = window.getComputedStyle(cur);
+        if (
+          Boolean(cur.disabled) ||
+          cur.hasAttribute('disabled') ||
+          cur.getAttribute('aria-disabled') === 'true' ||
+          clsLower.includes('disabled') ||
+          style.cursor === 'not-allowed' ||
+          style.pointerEvents === 'none'
+        ) {
+          return true;
+        }
+      }
+      cur = cur.parentElement;
+    }
+
+    return false;
+  }
+
+  function hasZeroTableRows() {
+    const mainEl = document.getElementById('main') || document.body;
+    const bodies = Array.from(mainEl.querySelectorAll('tbody, .arco-table-body')).filter(
+      isElementVisible
+    );
+    if (bodies.length === 0) return false;
+
+    for (const body of bodies) {
+      if (body.querySelectorAll('[role="row"]').length > 0) {
+        return false;
+      }
+      const rows = Array.from(body.querySelectorAll('tr'));
+      const hasDataRow = rows.some((tr) => {
+        const cls = typeof tr.className === 'string' ? tr.className : tr.getAttribute('class') || '';
+        if (cls.includes('arco-table-empty-row') || cls.toLowerCase().includes('empty')) {
+          return false;
+        }
+        const cells = Array.from(tr.querySelectorAll('td'));
+        return cells.some((td) => (td.textContent || '').trim() !== '');
+      });
+      if (hasDataRow) return false;
+    }
+
+    return true;
   }
 
   function findAccountTab(tabType) {
@@ -647,8 +737,15 @@
 
   // --- Step 3: Click Export with Smart Retry ---
 
+  function isActualExportButton(btn) {
+    if (!btn || !isElementVisible(btn)) return false;
+    const text = (btn.textContent || '').trim().toLowerCase();
+    const aria = (btn.getAttribute('aria-label') || '').trim().toLowerCase();
+    return text === 'export' || text.includes('export') || aria === 'export';
+  }
+
   function findExportButton() {
-    // 1. Check exact XPaths from your LIVE and Video Recorder JSONs
+    // 1. Check exact XPaths from LIVE and Video Recorder JSONs (verify button actually says Export)
     const exactXPaths = [
       '//*[@id="main"]//button[normalize-space(.)="Export" or @aria-label="Export"]',
       '//*[@id="main"]/div[2]/div/div/div/div/div[2]/div[3]/div/div/div/div/div[2]/div[1]/div[2]/div[2]/button',
@@ -658,16 +755,12 @@
 
     for (const xp of exactXPaths) {
       const btn = getElementByXPath(xp);
-      if (btn) return btn;
+      if (isActualExportButton(btn)) return btn;
     }
 
     // 2. Fallback: any visible button containing "Export"
     const mainEl = document.getElementById('main') || document.body;
-    const buttons = Array.from(mainEl.querySelectorAll('button')).filter((btn) => {
-      if (!isElementVisible(btn)) return false;
-      const text = (btn.textContent || '').trim();
-      return text === 'Export' || text.includes('Export') || btn.getAttribute('aria-label') === 'Export';
-    });
+    const buttons = Array.from(mainEl.querySelectorAll('button')).filter(isActualExportButton);
     return buttons[0] || null;
   }
 
@@ -696,6 +789,10 @@
       if (lastExportTaskCreatedTimestamp >= timestampMs) {
         return 'task';
       }
+      const curBtn = findExportButton();
+      if (hasNoAvailableData() || (curBtn && isExportButtonDisabled(curBtn))) {
+        return 'empty';
+      }
       await sleep(250);
     }
     return null;
@@ -704,14 +801,18 @@
   async function waitForExportAttempt(clickTime, attemptNum, reportKey, initialWaitMs) {
     const outcome = await waitForDownloadOrTaskSince(clickTime, initialWaitMs);
     if (outcome === 'download') {
-      return true;
+      return 'done';
+    }
+    if (outcome === 'empty') {
+      return 'empty';
     }
     if (outcome === 'task') {
       logStep(`[${reportKey}] Export task queued (Attempt #${attemptNum}) -> waiting up to 25s for file...`);
       updateReportStatus(reportKey, 'running', 'Generating file...');
-      return await waitForDownloadSince(clickTime, 25000);
+      const downloaded = await waitForDownloadSince(clickTime, 25000);
+      return downloaded ? 'done' : 'retry';
     }
-    return false;
+    return 'retry';
   }
 
   async function notifyExpectedDownload(reportKey, periodConfig) {
@@ -772,16 +873,24 @@
     logStep(`[${reportKey}] Waiting for table data to load...`);
     await waitForDataLoadingComplete();
 
-    const exportBtn = await waitForSelector(findExportButton, 6000, 250);
-    if (!exportBtn) {
+    const tabState = await waitForSelector(() => {
       if (hasNoAvailableData()) {
-        logStep(`[${reportKey}] No available data yet -> Skipped.`);
-        updateReportStatus(reportKey, 'empty', 'No data');
-        return { status: 'empty' };
+        return { empty: true, reason: 'no_data' };
       }
-      logStep(`[${reportKey}] Export button not found!`, true);
-      updateReportStatus(reportKey, 'error', 'No Export btn');
-      return { status: 'error', reason: 'Export button not found' };
+      const btn = findExportButton();
+      if (btn) {
+        if (isExportButtonDisabled(btn)) {
+          return { empty: true, reason: 'button_disabled' };
+        }
+        return { empty: false, button: btn };
+      }
+      return null;
+    }, 6000, 250);
+
+    if (!tabState || tabState.empty) {
+      logStep(`[${reportKey}] No available data (${tabState?.reason || 'timeout'}) -> Skipped.`);
+      updateReportStatus(reportKey, 'empty', 'No data');
+      return { status: 'empty' };
     }
 
     for (let attempt = 1; ; attempt++) {
@@ -792,10 +901,10 @@
       }
 
       const currentBtn =
-        attempt === 1 ? exportBtn : await waitForSelector(findExportButton, 3000, 200);
+        attempt === 1 ? tabState.button : await waitForSelector(findExportButton, 3000, 200);
       if (!currentBtn) {
-        if (hasNoAvailableData()) {
-          logStep(`[${reportKey}] No available data yet -> Skipped.`);
+        if (hasNoAvailableData() || hasZeroTableRows()) {
+          logStep(`[${reportKey}] No available data -> Skipped.`);
           updateReportStatus(reportKey, 'empty', 'No data');
           return { status: 'empty' };
         }
@@ -804,12 +913,7 @@
         return { status: 'error', reason: 'Export button not found' };
       }
 
-      const isDisabled =
-        currentBtn.disabled ||
-        currentBtn.getAttribute('aria-disabled') === 'true' ||
-        currentBtn.classList.contains('arco-btn-disabled');
-
-      if (isDisabled || hasNoAvailableData()) {
+      if (isExportButtonDisabled(currentBtn) || hasNoAvailableData()) {
         logStep(`[${reportKey}] Export button is disabled / No data -> Skipped.`);
         updateReportStatus(reportKey, 'empty', 'No data');
         return { status: 'empty' };
@@ -825,12 +929,24 @@
       await notifyExpectedDownload(reportKey, periodConfig);
       triggerExportButtonClick(currentBtn);
 
-      const downloaded = await waitForExportAttempt(clickTime, attempt, reportKey, 4500);
-      if (downloaded) {
+      const attemptOutcome = await waitForExportAttempt(clickTime, attempt, reportKey, 4500);
+      if (attemptOutcome === 'done') {
         logStep(`[${reportKey}] Download started on Attempt #${attempt}!`);
         updateReportStatus(reportKey, 'done', 'Downloaded ✓');
         await sleep(1000);
         return { status: 'done', attempts: attempt };
+      }
+
+      if (attemptOutcome === 'empty' || hasNoAvailableData() || isExportButtonDisabled(currentBtn)) {
+        logStep(`[${reportKey}] No available data yet / Export disabled -> Skipped.`);
+        updateReportStatus(reportKey, 'empty', 'No data');
+        return { status: 'empty' };
+      }
+
+      if (attempt >= 2 && hasZeroTableRows()) {
+        logStep(`[${reportKey}] Table has 0 data rows after ${attempt} attempts -> Skipped.`);
+        updateReportStatus(reportKey, 'empty', 'No data');
+        return { status: 'empty' };
       }
 
       logStep(

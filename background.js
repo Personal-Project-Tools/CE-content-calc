@@ -4,8 +4,6 @@
  * and orchestrates the 4-report workflow across LIVE -> Details and Video -> Details pages.
  */
 
-importScripts('report-calculator.js');
-
 const BG_VERSION = '2.1.0';
 
 const REPORT_PREFIX_MAP = {
@@ -32,7 +30,6 @@ let cachedPeriodConfig = null;
 let cachedExpectedDownload = null;
 let cacheHydrated = false;
 let hydratePromise = null;
-let activeExportSession = null;
 
 function hydrateCaches() {
   if (hydratePromise) return hydratePromise;
@@ -135,15 +132,6 @@ function getSellerAndPeriodFolder() {
 }
 
 function resolveDownloadSuggestion(downloadItem, suggest) {
-  if (
-    (typeof chrome?.runtime?.id === 'string' && downloadItem.byExtensionId === chrome.runtime.id) ||
-    (downloadItem.url || '').startsWith('data:') ||
-    /summary_.*\.xlsx$/i.test(downloadItem.filename || '')
-  ) {
-    suggest();
-    return;
-  }
-
   if (!isTikTokReportDownload(downloadItem)) {
     suggest();
     return;
@@ -160,32 +148,8 @@ function resolveDownloadSuggestion(downloadItem, suggest) {
   const reportPrefix =
     (reportKey && REPORT_PREFIX_MAP[reportKey]) || sanitizeFilenamePart(rawStem, 'report');
 
-  if (activeExportSession && reportKey) {
-    activeExportSession.sellerId = sellerId;
-    activeExportSession.periodLabel = periodLabel;
-    activeExportSession.downloads.set(downloadItem.id, {
-      id: downloadItem.id,
-      reportKey,
-      fileName: `${reportPrefix}${ext}`,
-      url: downloadItem.url || '',
-      finalUrl: downloadItem.finalUrl || '',
-      state: downloadItem.state || 'in_progress'
-    });
-  }
-
   const relativePath = `CE-Reports/${sellerId}_${periodLabel}/${reportPrefix}${ext}`;
   suggest({ filename: relativePath, conflictAction: 'overwrite' });
-}
-
-if (chrome.downloads && chrome.downloads.onChanged) {
-  chrome.downloads.onChanged.addListener((delta) => {
-    if (!activeExportSession) return;
-    const entry = activeExportSession.downloads.get(delta.id);
-    if (!entry) return;
-    if (delta.state?.current) {
-      entry.state = delta.state.current;
-    }
-  });
 }
 
 // Route TikTok reports through the Downloads/CE-Reports junction into repo Reports/
@@ -337,140 +301,12 @@ const EXPORT_SCOPE_LABELS = {
   video: 'Video Reports'
 };
 
-function uint8ToBase64(uint8) {
-  let binary = '';
-  const chunkSize = 0x8000;
-  for (let i = 0; i < uint8.length; i += chunkSize) {
-    binary += String.fromCharCode.apply(null, uint8.subarray(i, i + chunkSize));
-  }
-  return btoa(binary);
-}
-
-async function queryDownloadItemById(downloadId) {
-  return new Promise((resolve) => {
-    chrome.downloads.search({ id: downloadId }, (items) => {
-      if (chrome.runtime.lastError || !items || items.length === 0) {
-        resolve(null);
-        return;
-      }
-      resolve(items[0]);
-    });
-  });
-}
-
-async function fetchDownloadBytes(entry) {
-  const item = await queryDownloadItemById(entry.id);
-  const candidateUrls = [item?.url, item?.finalUrl, entry.url, entry.finalUrl].filter(
-    (u, idx, arr) => u && !u.startsWith('blob:') && !u.startsWith('data:') && arr.indexOf(u) === idx
-  );
-
-  for (const url of candidateUrls) {
-    try {
-      const res = await fetch(url, { credentials: 'include' });
-      if (res.ok) {
-        return new Uint8Array(await res.arrayBuffer());
-      }
-    } catch {
-      // Try next candidate URL
-    }
-  }
-  return null;
-}
-
-async function tryGenerateAndDownloadSummary(session) {
-  if (!session || session.downloads.size === 0 || typeof ReportCalculator === 'undefined') {
-    return false;
-  }
-
-  const deadline = Date.now() + 5000;
-  while (Date.now() < deadline) {
-    const entries = Array.from(session.downloads.values());
-    let allSettled = true;
-    for (const entry of entries) {
-      if (entry.state === 'in_progress') {
-        const latest = await queryDownloadItemById(entry.id);
-        if (latest?.state) entry.state = latest.state;
-        if (latest?.finalUrl) entry.finalUrl = latest.finalUrl;
-      }
-      if (entry.state === 'in_progress') {
-        allSettled = false;
-      }
-    }
-    if (allSettled) break;
-    await sleep(300);
-  }
-
-  // Deduplicate by reportKey (keep latest completed download for each report)
-  const latestByKey = new Map();
-  for (const entry of session.downloads.values()) {
-    if (entry.state === 'interrupted') continue;
-    latestByKey.set(entry.reportKey, entry);
-  }
-
-  if (latestByKey.size === 0) return false;
-
-  const fileEntries = [];
-  for (const entry of latestByKey.values()) {
-    const bytes = await fetchDownloadBytes(entry);
-    if (!bytes) {
-      console.warn(
-        `[TikTok Extension] Skipping background summary calculation: could not fetch ${entry.fileName}`
-      );
-      return false;
-    }
-    fileEntries.push({
-      fileName: entry.fileName,
-      contentKey: entry.reportKey.startsWith('live') ? 'live' : 'video',
-      bytes
-    });
-  }
-
-  fileEntries.sort((a, b) => a.fileName.localeCompare(b.fileName));
-  const { summaryRows, breakdownRows } = await ReportCalculator.aggregateReportEntries(
-    session.sellerId,
-    session.periodLabel,
-    fileEntries
-  );
-  if (breakdownRows.length === 0) return false;
-
-  const workbookUint8 = ReportCalculator.buildWorkbookFromSummaryData(summaryRows, breakdownRows);
-  const b64 = uint8ToBase64(workbookUint8);
-  const summaryFilename = `CE-Reports/${session.sellerId}_${session.periodLabel}/Summary_${session.sellerId}_${session.periodLabel}.xlsx`;
-
-  await new Promise((resolve) => {
-    chrome.downloads.download(
-      {
-        url: `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${b64}`,
-        filename: summaryFilename,
-        conflictAction: 'overwrite',
-        saveAs: false
-      },
-      () => {
-        void chrome.runtime.lastError;
-        resolve();
-      }
-    );
-  });
-  return true;
-}
-
 async function runBackgroundExportWorkflow(sourceTabId, reportUrls, periodConfig, scope = 'all') {
   const normalizedScope = scope === 'live' || scope === 'video' ? scope : 'all';
 
   await hydrateCaches();
   await chrome.storage.local.remove(['ttk_workflow_log']);
   await chrome.storage.local.set({ ttk_workflow_running: normalizedScope });
-
-  const activeShop = cachedSellerPayload?.active_shop || cachedSellerPayload?.shops?.[0];
-  const initialSellerId = sanitizeFilenamePart(activeShop?.formatted_seller_id, 'UNKNOWN_SELLER');
-  const rawPeriod = periodConfig?.mode === 'month' ? periodConfig?.month : periodConfig?.date;
-  const initialPeriod = sanitizeFilenamePart(rawPeriod, getTodayLocalDateStr());
-
-  activeExportSession = {
-    sellerId: initialSellerId,
-    periodLabel: initialPeriod,
-    downloads: new Map()
-  };
 
   let workerTabId = null;
 
@@ -535,12 +371,6 @@ async function runBackgroundExportWorkflow(sourceTabId, reportUrls, periodConfig
       await sleep(3000);
     }
 
-    try {
-      await tryGenerateAndDownloadSummary(activeExportSession);
-    } catch (calcErr) {
-      console.warn('[TikTok Extension] Summary workbook export skipped:', calcErr);
-    }
-
     const label = EXPORT_SCOPE_LABELS[normalizedScope];
     saveWorkflowLog(`✓ Completed: ${label} exported!`, 'success');
     return { ok: true, scope: normalizedScope, liveRes, videoRes };
@@ -548,7 +378,6 @@ async function runBackgroundExportWorkflow(sourceTabId, reportUrls, periodConfig
     saveWorkflowLog(err.message || String(err), 'error');
     return { ok: false, error: err.message || String(err) };
   } finally {
-    activeExportSession = null;
     if (workerTabId) {
       try {
         await chrome.tabs.remove(workerTabId);
