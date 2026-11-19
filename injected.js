@@ -10,6 +10,7 @@
   }
 
   const TARGET_ENDPOINT = '/api/v1/seller/workbench/get_all_sellers';
+  const EXPORT_ENDPOINT_HINTS = ['/live/list/export', '/video/analytics/video/list/export'];
   let lastCapturedPayload = null;
 
   function parseSellerData(data, requestUrl) {
@@ -32,6 +33,13 @@
       // Format requirement: country.TTK.seller
       const formattedSellerId = `${country}.TTK.${seller}`;
 
+      // Build seller-specific analytics report page URLs
+      const origin = window.location.origin;
+      const reportUrls = {
+        live_details: `${origin}/compass/live-analysis/live-details?shop_region=${encodeURIComponent(country)}`,
+        video_details: `${origin}/compass/video-analytics/video-details?platform_data_source=shop&shop_region=${encodeURIComponent(country)}`
+      };
+
       parsedShops.push({
         formatted_seller_id: formattedSellerId,
         seller: seller,
@@ -42,6 +50,7 @@
         operation_mode: sellerInfo.operation_mode || '',
         status: globalSeller.status ?? null,
         seller_type: globalSeller.seller_type ?? null,
+        report_urls: reportUrls,
         raw_seller_info: sellerInfo
       });
     }
@@ -86,6 +95,18 @@
           }).catch(err => {
             console.debug('[TikTok Extension] JSON parse error in fetch clone:', err);
           });
+        } else if (url && EXPORT_ENDPOINT_HINTS.some(hint => url.includes(hint))) {
+          const clone = response.clone();
+          clone.json().then(jsonData => {
+            const taskId = jsonData?.data?.file;
+            if (taskId) {
+              window.dispatchEvent(
+                new CustomEvent('TIKTOK_EXPORT_TASK_CREATED', {
+                  detail: { taskId, url, timestamp: Date.now() }
+                })
+              );
+            }
+          }).catch(() => {});
         }
       } catch (err) {
         console.debug('[TikTok Extension] Error in fetch hook:', err);
@@ -140,4 +161,3 @@
 
   console.log('[TikTok Extension] Injected Hook (MAIN world) listening for get_all_sellers API.');
 })();
-

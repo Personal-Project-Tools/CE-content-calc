@@ -72,6 +72,60 @@
           </div>
         </div>
 
+        <!-- Report Navigation & Workflow Section -->
+        <div class="report-routes-card">
+          <div class="routes-header">
+            <span class="routes-title">1. Task Mode &amp; Period</span>
+            <span class="routes-Region-hint" id="region-param-badge">?shop_region=--</span>
+          </div>
+
+          <!-- Mode Switcher: Single Day vs Month -->
+          <div class="mode-switch" role="tablist" aria-label="Report period mode">
+            <button type="button" id="mode-btn-day" class="mode-btn active" data-mode="day" role="tab" aria-selected="true">
+              Single Day (Daily)
+            </button>
+            <button type="button" id="mode-btn-month" class="mode-btn" data-mode="month" role="tab" aria-selected="false">
+              Month (Monthly)
+            </button>
+          </div>
+
+          <!-- Single Day Input -->
+          <div id="field-day-wrapper" class="period-field-wrapper">
+            <label class="date-field">
+              <span class="date-label">Target Date (LIVE: 1 click &middot; Video: 2 clicks)</span>
+              <input type="date" id="input-single-date" class="date-input" />
+            </label>
+          </div>
+
+          <!-- Month Input -->
+          <div id="field-month-wrapper" class="period-field-wrapper hidden">
+            <label class="date-field">
+              <span class="date-label">Target Month (Selects full month on calendar)</span>
+              <input type="month" id="input-target-month" class="date-input" />
+            </label>
+          </div>
+
+          <div class="routes-header routes-subheader">
+            <span class="routes-title">2. Export Reports</span>
+          </div>
+
+          <div class="workflow-actions">
+            <button type="button" id="btn-export-all" class="btn btn-primary" title="Export all LIVE and Video reports (up to 4 reports)">
+              &#9654; Auto Export All 4 Reports
+            </button>
+            <div class="routes-actions">
+              <button type="button" id="btn-export-live" class="btn btn-secondary btn-full" title="Export LIVE Details reports (Linked + Affiliate)">
+                Export LIVE Reports
+              </button>
+              <button type="button" id="btn-export-video" class="btn btn-secondary btn-full" title="Export Video Details reports (Linked + Affiliate)">
+                Export Video Reports
+              </button>
+            </div>
+          </div>
+
+          <div id="workflow-log-box" class="workflow-log-box hidden" role="status" aria-live="polite"></div>
+        </div>
+
         <!-- Calculator Prep Section -->
         <div class="calculator-preview">
           <div class="calc-header">
