@@ -353,11 +353,52 @@ def resolve_seller_matches(
     return [("Unmapped", cleaned)]
 
 
+def _accumulate_seller_folder(
+    date_str: str,
+    raw_seller_id: str,
+    xlsx_files: list[Path],
+    seller_mapping: dict[str, list[tuple[str, str]]],
+    grouped: dict[str, dict[tuple[str, str], dict[str, dict[str, float]]]],
+) -> None:
+    """Compute metrics across all report files in one Seller ID folder and add to grouped totals."""
+    if not xlsx_files:
+        return
+
+    folder_totals = {
+        "live": {"revenue": 0.0, "product_impression": 0.0, "impression": 0.0},
+        "video": {"revenue": 0.0, "product_impression": 0.0, "impression": 0.0},
+    }
+
+    for file_path in xlsx_files:
+        content_key = classify_report_filename(file_path.name)
+        if content_key is None:
+            continue
+        rows = read_xlsx_rows(file_path)
+        metrics = compute_file_metrics(rows, content_key)
+        folder_totals[content_key]["revenue"] += metrics["revenue"]
+        folder_totals[content_key]["product_impression"] += metrics["product_impression"]
+        folder_totals[content_key]["impression"] += metrics["impression"]
+
+    for client_name, full_seller_id in resolve_seller_matches(raw_seller_id, seller_mapping):
+        seller_key = (client_name, full_seller_id)
+        seller_acc = grouped[date_str].setdefault(
+            seller_key,
+            {
+                "live": {"revenue": 0.0, "product_impression": 0.0, "impression": 0.0},
+                "video": {"revenue": 0.0, "product_impression": 0.0, "impression": 0.0},
+            },
+        )
+        for content_key in ("live", "video"):
+            seller_acc[content_key]["revenue"] += folder_totals[content_key]["revenue"]
+            seller_acc[content_key]["product_impression"] += folder_totals[content_key]["product_impression"]
+            seller_acc[content_key]["impression"] += folder_totals[content_key]["impression"]
+
+
 def collect_metrics_by_date(
     reports_dir: Path,
     seller_mapping: dict[str, list[tuple[str, str]]] | None = None,
 ) -> dict[str, list[dict[str, object]]]:
-    """Scan Reports/ subdirectories and return calculated metric rows grouped by date."""
+    """Scan Reports/{date}/{seller_id}/*.xlsx (and legacy flat folders) and return metrics grouped by date."""
     if not reports_dir.exists():
         raise FileNotFoundError(f"Reports directory does not exist: {reports_dir}")
 
@@ -368,41 +409,23 @@ def collect_metrics_by_date(
         if not entry.is_dir():
             continue
 
-        xlsx_files = sorted(
+        # 3-level structure: Reports/{date}/{seller_id}/*.xlsx
+        seller_subdirs = [sub for sub in sorted(entry.iterdir()) if sub.is_dir()]
+        for seller_dir in seller_subdirs:
+            sub_xlsx = sorted(
+                f
+                for f in seller_dir.iterdir()
+                if f.is_file() and classify_report_filename(f.name) is not None
+            )
+            _accumulate_seller_folder(entry.name, seller_dir.name, sub_xlsx, mapping, grouped)
+
+        # Backward compatibility: legacy 2-level Reports/{seller_id}_{date}/*.xlsx
+        direct_xlsx = sorted(
             f for f in entry.iterdir() if f.is_file() and classify_report_filename(f.name) is not None
         )
-        if not xlsx_files:
-            continue
-
-        raw_seller_id, date_str = parse_folder_name(entry.name)
-        folder_totals = {
-            "live": {"revenue": 0.0, "product_impression": 0.0, "impression": 0.0},
-            "video": {"revenue": 0.0, "product_impression": 0.0, "impression": 0.0},
-        }
-
-        for file_path in xlsx_files:
-            content_key = classify_report_filename(file_path.name)
-            if content_key is None:
-                continue
-            rows = read_xlsx_rows(file_path)
-            metrics = compute_file_metrics(rows, content_key)
-            folder_totals[content_key]["revenue"] += metrics["revenue"]
-            folder_totals[content_key]["product_impression"] += metrics["product_impression"]
-            folder_totals[content_key]["impression"] += metrics["impression"]
-
-        for client_name, full_seller_id in resolve_seller_matches(raw_seller_id, mapping):
-            seller_key = (client_name, full_seller_id)
-            seller_acc = grouped[date_str].setdefault(
-                seller_key,
-                {
-                    "live": {"revenue": 0.0, "product_impression": 0.0, "impression": 0.0},
-                    "video": {"revenue": 0.0, "product_impression": 0.0, "impression": 0.0},
-                },
-            )
-            for content_key in ("live", "video"):
-                seller_acc[content_key]["revenue"] += folder_totals[content_key]["revenue"]
-                seller_acc[content_key]["product_impression"] += folder_totals[content_key]["product_impression"]
-                seller_acc[content_key]["impression"] += folder_totals[content_key]["impression"]
+        if direct_xlsx:
+            raw_seller_id, date_str = parse_folder_name(entry.name)
+            _accumulate_seller_folder(date_str, raw_seller_id, direct_xlsx, mapping, grouped)
 
     results_by_date: dict[str, list[dict[str, object]]] = {}
     for date_str in sorted(grouped.keys()):

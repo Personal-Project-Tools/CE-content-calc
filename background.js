@@ -148,7 +148,7 @@ function resolveDownloadSuggestion(downloadItem, suggest) {
   const reportPrefix =
     (reportKey && REPORT_PREFIX_MAP[reportKey]) || sanitizeFilenamePart(rawStem, 'report');
 
-  const relativePath = `CE-Reports/${sellerId}_${periodLabel}/${reportPrefix}${ext}`;
+  const relativePath = `CE-Reports/${periodLabel}/${sellerId}/${reportPrefix}${ext}`;
   suggest({ filename: relativePath, conflictAction: 'overwrite' });
 }
 
