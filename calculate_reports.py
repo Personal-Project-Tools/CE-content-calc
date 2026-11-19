@@ -19,6 +19,7 @@ import zipfile
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_REPORTS_DIR = BASE_DIR / "Reports"
 DEFAULT_OUTPUT_FILE = BASE_DIR / "results" / "tiktok_content_metrics.xlsx"
+DEFAULT_SELLER_LIST_FILE = BASE_DIR / "seller_list.xlsx"
 
 CONTENT_TYPES = {
     "live": "TikTok Content Live",
@@ -60,6 +61,7 @@ _CTRL_CHARS_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
 _TRAILING_UNIT_RE = re.compile(r"\s*\([^)]*\)\s*$")
 _NON_NUMERIC_RE = re.compile(r"[^0-9.\-]")
 _INVALID_SHEET_CHARS_RE = re.compile(r"[:\\/?*\[\]]")
+_SELLER_CODE_RE = re.compile(r"([A-Za-z]{2}\.TTK\.\d+)", re.IGNORECASE)
 
 
 def _local_tag(tag: str) -> str:
@@ -285,12 +287,82 @@ def parse_folder_name(folder_name: str) -> tuple[str, str]:
     return seller_id, date_str
 
 
-def collect_metrics_by_date(reports_dir: Path) -> dict[str, list[dict[str, object]]]:
+def load_seller_mapping(seller_list_path: Path) -> dict[str, list[tuple[str, str]]]:
+    """Load Seller ID -> [(Clients, full Seller ID)] mapping from seller_list.xlsx.
+
+    Forward-fills the Clients column because seller_list.xlsx uses vertically merged cells.
+    """
+    if not seller_list_path.exists():
+        return {}
+
+    rows = read_xlsx_rows(seller_list_path)
+    if not rows:
+        return {}
+
+    header = [str(cell or "").strip().lower() for cell in rows[0]]
+    client_col = next((i for i, h in enumerate(header) if "client" in h), 0)
+    seller_col = next((i for i, h in enumerate(header) if "seller" in h), 1)
+    start_row = 1 if ("client" in " ".join(header) or "seller" in " ".join(header)) else 0
+
+    mapping: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    current_client = ""
+
+    for row in rows[start_row:]:
+        raw_client = str(row[client_col]).strip() if client_col < len(row) else ""
+        if raw_client:
+            current_client = raw_client
+
+        full_seller_id = str(row[seller_col]).strip() if seller_col < len(row) else ""
+        if not full_seller_id:
+            continue
+
+        client_label = current_client or "Unmapped"
+        pair = (client_label, full_seller_id)
+
+        full_key = f"full:{full_seller_id.lower()}"
+        if pair not in mapping[full_key]:
+            mapping[full_key].append(pair)
+
+        code_match = _SELLER_CODE_RE.search(full_seller_id)
+        if code_match:
+            code_key = code_match.group(1).upper()
+            if pair not in mapping[code_key]:
+                mapping[code_key].append(pair)
+
+    return dict(mapping)
+
+
+def resolve_seller_matches(
+    raw_seller_id: str, seller_mapping: dict[str, list[tuple[str, str]]]
+) -> list[tuple[str, str]]:
+    """Resolve a folder's seller ID into matching (Clients, full Seller ID) pairs."""
+    cleaned = str(raw_seller_id or "").strip()
+    if not seller_mapping:
+        return [("Unmapped", cleaned)]
+
+    full_matches = seller_mapping.get(f"full:{cleaned.lower()}")
+    if full_matches:
+        return full_matches
+
+    code_match = _SELLER_CODE_RE.search(cleaned)
+    if code_match:
+        code_matches = seller_mapping.get(code_match.group(1).upper())
+        if code_matches:
+            return code_matches
+
+    return [("Unmapped", cleaned)]
+
+
+def collect_metrics_by_date(
+    reports_dir: Path,
+    seller_mapping: dict[str, list[tuple[str, str]]] | None = None,
+) -> dict[str, list[dict[str, object]]]:
     """Scan Reports/ subdirectories and return calculated metric rows grouped by date."""
     if not reports_dir.exists():
         raise FileNotFoundError(f"Reports directory does not exist: {reports_dir}")
 
-    grouped: dict[str, dict[str, dict[str, dict[str, float]]]] = defaultdict(dict)
+    mapping = seller_mapping if seller_mapping is not None else {}
+    grouped: dict[str, dict[tuple[str, str], dict[str, dict[str, float]]]] = defaultdict(dict)
 
     for entry in sorted(reports_dir.iterdir()):
         if not entry.is_dir():
@@ -302,14 +374,11 @@ def collect_metrics_by_date(reports_dir: Path) -> dict[str, list[dict[str, objec
         if not xlsx_files:
             continue
 
-        seller_id, date_str = parse_folder_name(entry.name)
-        seller_acc = grouped[date_str].setdefault(
-            seller_id,
-            {
-                "live": {"revenue": 0.0, "product_impression": 0.0, "impression": 0.0},
-                "video": {"revenue": 0.0, "product_impression": 0.0, "impression": 0.0},
-            },
-        )
+        raw_seller_id, date_str = parse_folder_name(entry.name)
+        folder_totals = {
+            "live": {"revenue": 0.0, "product_impression": 0.0, "impression": 0.0},
+            "video": {"revenue": 0.0, "product_impression": 0.0, "impression": 0.0},
+        }
 
         for file_path in xlsx_files:
             content_key = classify_report_filename(file_path.name)
@@ -317,20 +386,38 @@ def collect_metrics_by_date(reports_dir: Path) -> dict[str, list[dict[str, objec
                 continue
             rows = read_xlsx_rows(file_path)
             metrics = compute_file_metrics(rows, content_key)
-            seller_acc[content_key]["revenue"] += metrics["revenue"]
-            seller_acc[content_key]["product_impression"] += metrics["product_impression"]
-            seller_acc[content_key]["impression"] += metrics["impression"]
+            folder_totals[content_key]["revenue"] += metrics["revenue"]
+            folder_totals[content_key]["product_impression"] += metrics["product_impression"]
+            folder_totals[content_key]["impression"] += metrics["impression"]
+
+        for client_name, full_seller_id in resolve_seller_matches(raw_seller_id, mapping):
+            seller_key = (client_name, full_seller_id)
+            seller_acc = grouped[date_str].setdefault(
+                seller_key,
+                {
+                    "live": {"revenue": 0.0, "product_impression": 0.0, "impression": 0.0},
+                    "video": {"revenue": 0.0, "product_impression": 0.0, "impression": 0.0},
+                },
+            )
+            for content_key in ("live", "video"):
+                seller_acc[content_key]["revenue"] += folder_totals[content_key]["revenue"]
+                seller_acc[content_key]["product_impression"] += folder_totals[content_key]["product_impression"]
+                seller_acc[content_key]["impression"] += folder_totals[content_key]["impression"]
 
     results_by_date: dict[str, list[dict[str, object]]] = {}
     for date_str in sorted(grouped.keys()):
         date_rows: list[dict[str, object]] = []
-        for seller_id in sorted(grouped[date_str].keys()):
-            acc = grouped[date_str][seller_id]
+        sorted_sellers = sorted(
+            grouped[date_str].keys(), key=lambda pair: (pair[0].lower(), pair[1].lower())
+        )
+        for client_name, full_seller_id in sorted_sellers:
+            acc = grouped[date_str][(client_name, full_seller_id)]
             for content_key in ("live", "video"):
                 totals = acc[content_key]
                 date_rows.append(
                     {
-                        "seller_id": seller_id,
+                        "client": client_name,
+                        "seller_id": full_seller_id,
                         "date": date_str,
                         "content_type": CONTENT_TYPES[content_key],
                         "revenue": round(totals["revenue"], 2),
@@ -365,7 +452,7 @@ def _sanitize_sheet_name(raw_name: str, used_names: set[str]) -> str:
 
 
 def _build_worksheet_xml(rows_data: list[dict[str, object]]) -> str:
-    col_widths = [30, 14, 24, 16, 20, 16]
+    col_widths = [22, 42, 14, 24, 16, 20, 16]
     cols_xml = (
         "<cols>"
         + "".join(
@@ -375,7 +462,15 @@ def _build_worksheet_xml(rows_data: list[dict[str, object]]) -> str:
         + "</cols>"
     )
 
-    headers = ["Seller ID", "Date", "Content Type", "revenue", "product_impression", "impression"]
+    headers = [
+        "Clients",
+        "Seller ID",
+        "Date",
+        "Content Type",
+        "revenue",
+        "product_impression",
+        "impression",
+    ]
     header_cells = "".join(
         f'<c r="{_index_to_col_letters(c)}1" t="inlineStr" s="1"><is><t>{_clean_xml_text(h)}</t></is></c>'
         for c, h in enumerate(headers)
@@ -384,12 +479,13 @@ def _build_worksheet_xml(rows_data: list[dict[str, object]]) -> str:
 
     for r_offset, item in enumerate(rows_data, start=2):
         cells = [
-            f'<c r="A{r_offset}" t="inlineStr"><is><t>{_clean_xml_text(item["seller_id"])}</t></is></c>',
-            f'<c r="B{r_offset}" t="inlineStr"><is><t>{_clean_xml_text(item["date"])}</t></is></c>',
-            f'<c r="C{r_offset}" t="inlineStr"><is><t>{_clean_xml_text(item["content_type"])}</t></is></c>',
-            f'<c r="D{r_offset}" s="2"><v>{item["revenue"]}</v></c>',
-            f'<c r="E{r_offset}" s="3"><v>{item["product_impression"]}</v></c>',
-            f'<c r="F{r_offset}" s="3"><v>{item["impression"]}</v></c>',
+            f'<c r="A{r_offset}" t="inlineStr"><is><t>{_clean_xml_text(item["client"])}</t></is></c>',
+            f'<c r="B{r_offset}" t="inlineStr"><is><t>{_clean_xml_text(item["seller_id"])}</t></is></c>',
+            f'<c r="C{r_offset}" t="inlineStr"><is><t>{_clean_xml_text(item["date"])}</t></is></c>',
+            f'<c r="D{r_offset}" t="inlineStr"><is><t>{_clean_xml_text(item["content_type"])}</t></is></c>',
+            f'<c r="E{r_offset}" s="2"><v>{item["revenue"]}</v></c>',
+            f'<c r="F{r_offset}" s="3"><v>{item["product_impression"]}</v></c>',
+            f'<c r="G{r_offset}" s="3"><v>{item["impression"]}</v></c>',
         ]
         xml_rows.append(f'<row r="{r_offset}">{"".join(cells)}</row>')
 
@@ -505,13 +601,19 @@ def write_results_xlsx(output_path: Path, results_by_date: dict[str, list[dict[s
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Aggregate TikTok Shop LIVE & Video metrics per Seller ID and date."
+        description="Aggregate TikTok Shop LIVE & Video metrics per Client, Seller ID, and date."
     )
     parser.add_argument(
         "--reports-dir",
         type=Path,
         default=DEFAULT_REPORTS_DIR,
         help="Input Reports directory containing {seller_id}_{date} folders.",
+    )
+    parser.add_argument(
+        "--seller-list",
+        type=Path,
+        default=DEFAULT_SELLER_LIST_FILE,
+        help="Path to seller_list.xlsx mapping Clients and full Seller IDs.",
     )
     parser.add_argument(
         "--output",
@@ -521,7 +623,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    results_by_date = collect_metrics_by_date(args.reports_dir)
+    seller_mapping = load_seller_mapping(args.seller_list)
+    results_by_date = collect_metrics_by_date(args.reports_dir, seller_mapping)
     if not results_by_date:
         print(f"No valid report files found under: {args.reports_dir}")
         return
@@ -532,7 +635,7 @@ def main() -> None:
         print(f"\n=== Sheet: {date_str} ===")
         for row in rows:
             print(
-                f"  {row['seller_id']} | {str(row['content_type']):<22} | "
+                f"  {str(row['client']):<16} | {row['seller_id']} | {str(row['content_type']):<22} | "
                 f"revenue={row['revenue']:>10.2f} | "
                 f"product_impression={row['product_impression']:>10,} | "
                 f"impression={row['impression']:>10,}"
