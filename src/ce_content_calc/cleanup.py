@@ -1,22 +1,13 @@
-"""Delete date folders inside Reports/ within an inclusive YYYY-MM-DD range.
-
-Usage:
-    .venv\\Scripts\\python.exe delete.py --start '2026-11-15' --end '2026-11-18'
-    .venv\\Scripts\\python.exe delete.py --start '2026-11-15' --end '2026-11-18' --dry-run
-"""
+"""Date-range directory cleanup utilities for data/reports/{YYYY-MM-DD}/."""
 
 from __future__ import annotations
 
-import argparse
 import datetime
 from pathlib import Path
 import re
 import shutil
-import sys
 
 
-BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_REPORTS_DIR = BASE_DIR / "Reports"
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
@@ -61,6 +52,9 @@ def delete_reports_in_range(
 
     Returns (deleted_folders, total_files_removed, total_bytes_freed).
     """
+    if start_date > end_date:
+        raise ValueError(f"Start date ({start_date}) cannot be after end date ({end_date}).")
+
     if not reports_dir.exists():
         print(f"Reports directory not found: {reports_dir}")
         return 0, 0, 0
@@ -92,9 +86,7 @@ def delete_reports_in_range(
             )
         else:
             shutil.rmtree(folder_path)
-            print(
-                f"[DELETED] {folder_path} ({file_count} files, {format_size(byte_count)})"
-            )
+            print(f"[DELETED] {folder_path} ({file_count} files, {format_size(byte_count)})")
         deleted_folders += 1
         total_files += file_count
         total_bytes += byte_count
@@ -105,51 +97,3 @@ def delete_reports_in_range(
         f"{total_files} file(s), {format_size(total_bytes)} freed."
     )
     return deleted_folders, total_files, total_bytes
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Delete downloaded TikTok report folders inside Reports/ for a YYYY-MM-DD date range."
-    )
-    parser.add_argument(
-        "--start",
-        required=True,
-        help="Start date (inclusive) in YYYY-MM-DD format.",
-    )
-    parser.add_argument(
-        "--end",
-        required=True,
-        help="End date (inclusive) in YYYY-MM-DD format.",
-    )
-    parser.add_argument(
-        "--reports-dir",
-        type=Path,
-        default=DEFAULT_REPORTS_DIR,
-        help="Target Reports directory containing YYYY-MM-DD folders.",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Preview matching folders without deleting anything.",
-    )
-    args = parser.parse_args()
-
-    try:
-        start_date = parse_cli_date(args.start, "--start")
-        end_date = parse_cli_date(args.end, "--end")
-    except ValueError as err:
-        print(f"Error: {err}", file=sys.stderr)
-        sys.exit(2)
-
-    if start_date > end_date:
-        print(
-            f"Error: --start ({start_date}) cannot be after --end ({end_date}).",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-
-    delete_reports_in_range(args.reports_dir, start_date, end_date, dry_run=args.dry_run)
-
-
-if __name__ == "__main__":
-    main()

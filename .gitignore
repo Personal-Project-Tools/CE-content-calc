@@ -1,5 +1,20 @@
-Note.txt
-Reports/*
-!Reports/.gitkeep
+# Python & Virtual Environment
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
 
-results/tiktok_content_metrics.xlsx
+# Runtime downloaded reports & generated Excel outputs
+data/reports/*
+!data/reports/.gitkeep
+data/results/*
+!data/results/.gitkeep
+
+# Temporary, Office lock, and local OS files
+~$*.xlsx
+Note.txt
+temp/
+.DS_Store
+Thumbs.db

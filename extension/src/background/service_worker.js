@@ -254,7 +254,7 @@ async function sendMessageWithAutoInject(tabId, payload) {
           if (chrome.scripting) {
             await chrome.scripting.executeScript({
               target: { tabId },
-              files: ['content.js']
+              files: ['src/content/content.js']
             });
             await sleep(300);
             chrome.tabs.sendMessage(tabId, payload, (retryResponse) => {

@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ce-content-calc"
+version = "0.2.0"
+description = "TikTok Shop LIVE & Video report downloader (MV3 Chrome Extension) and metrics calculator."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+ce-calculate = "ce_content_calc.cli:main_calculate"
+ce-delete = "ce_content_calc.cli:main_delete"
+
+[tool.setuptools.packages.find]
+where = ["src"]

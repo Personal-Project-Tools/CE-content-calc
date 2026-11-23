@@ -14,16 +14,16 @@
     "https://*.tiktokglobalshop.com/*"
   ],
   "action": {
-    "default_popup": "popup.html",
+    "default_popup": "src/popup/popup.html",
     "default_icon": {
-      "16": "icons/icon16.png",
-      "32": "icons/icon32.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
+      "16": "assets/icons/icon16.png",
+      "32": "assets/icons/icon32.png",
+      "48": "assets/icons/icon48.png",
+      "128": "assets/icons/icon128.png"
     }
   },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "src/background/service_worker.js"
   },
   "content_scripts": [
     {
@@ -31,7 +31,7 @@
         "https://*.tiktok.com/*",
         "https://*.tiktokglobalshop.com/*"
       ],
-      "js": ["injected.js"],
+      "js": ["src/content/injected.js"],
       "world": "MAIN",
       "run_at": "document_start"
     },
@@ -40,14 +40,14 @@
         "https://*.tiktok.com/*",
         "https://*.tiktokglobalshop.com/*"
       ],
-      "js": ["content.js"],
+      "js": ["src/content/content.js"],
       "run_at": "document_start"
     }
   ],
   "icons": {
-    "16": "icons/icon16.png",
-    "32": "icons/icon32.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
+    "16": "assets/icons/icon16.png",
+    "32": "assets/icons/icon32.png",
+    "48": "assets/icons/icon48.png",
+    "128": "assets/icons/icon128.png"
   }
 }
