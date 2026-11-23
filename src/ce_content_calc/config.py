@@ -9,8 +9,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = PROJECT_ROOT / "config"
 DATA_DIR = PROJECT_ROOT / "data"
 
-DEFAULT_REPORTS_DIR = DATA_DIR / "reports"
-DEFAULT_RESULTS_DIR = DATA_DIR / "results"
+DEFAULT_RAW_FILE_DIR = DATA_DIR / "raw_file"
+DEFAULT_REPORTS_DIR = DEFAULT_RAW_FILE_DIR
+DEFAULT_RESULTS_DIR = DATA_DIR / "reports"
 DEFAULT_OUTPUT_FILE = DEFAULT_RESULTS_DIR / "tiktok_content_metrics.xlsx"
 DEFAULT_SELLER_LIST_FILE = CONFIG_DIR / "seller_list.xlsx"
 

@@ -1,4 +1,4 @@
-"""Date-range directory cleanup utilities for data/reports/{YYYY-MM-DD}/."""
+"""Date-range directory cleanup utilities for data/raw_file/{YYYY-MM-DD}/."""
 
 from __future__ import annotations
 

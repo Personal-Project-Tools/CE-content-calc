@@ -8,9 +8,9 @@ Tài liệu này hướng dẫn đầy đủ quy trình vận hành hằng ngày
 
 | Bước | Công cụ sử dụng | Việc cần làm | Kết quả nhận được |
 |---|---|---|---|
-| **Bước 1** | Chrome Extension (**TikTok Content Calc**) | Chọn shop → chọn ngày/tháng → bấm tự động xuất báo cáo | Tối đa 4 file báo cáo được tự động xếp vào `data\reports\<Ngày>\<Seller ID>\` |
-| **Bước 2** | Terminal (`calculate_reports.py`) | Chạy lệnh tổng hợp số liệu & ghép tên khách hàng | Xuất ra 1 file Excel tổng tại `data\results\tiktok_content_metrics.xlsx` (chia sheet theo ngày) |
-| **Bước 3** | Terminal (`delete_reports.py`) | Xóa các thư mục ngày cũ không còn dùng | Giải phóng dung lượng ổ cứng, giữ lại file kết quả tổng hợp |
+| **Bước 1** | Chrome Extension (**TikTok Content Calc**) | Chọn shop → chọn ngày/tháng → bấm tự động xuất báo cáo | Tối đa 4 file báo cáo gốc được tự động xếp vào `data\raw_file\<Ngày>\<Seller ID>\` |
+| **Bước 2** | Terminal (`calculate_reports.py`) | Chạy lệnh tổng hợp số liệu & ghép tên khách hàng | Xuất ra 1 file Excel tổng tại `data\reports\tiktok_content_metrics.xlsx` (chia sheet theo ngày) |
+| **Bước 3** | Terminal (`delete_reports.py`) | Xóa các thư mục ngày cũ không còn dùng trong `data\raw_file\` | Giải phóng dung lượng ổ cứng, giữ lại file kết quả tổng hợp |
 
 ---
 
@@ -22,11 +22,11 @@ Tài liệu này hướng dẫn đầy đủ quy trình vận hành hằng ngày
 2. Tìm mục **Ask where to save each file before downloading** (*Hỏi vị trí lưu từng tệp trước khi tải xuống*).
 3. **Tắt** công tắc này (gạt sang trái).
 
-### 1.2. Liên kết thư mục tải xuống với thư mục `data\reports\`
+### 1.2. Liên kết thư mục tải xuống với thư mục `data\raw_file\`
 Chạy file `scripts\setup-reports-junction.bat` (nhấp đúp trực tiếp hoặc chạy từ Terminal trong thư mục dự án).
 
-* Tác dụng: Mọi báo cáo Chrome tải về thư mục `%USERPROFILE%\Downloads\CE-Reports` sẽ được dẫn thẳng vào `data\reports\` bên trong bộ công cụ.
-* Nếu trước đó máy bạn đã có sẵn thư mục `Downloads\CE-Reports` chứa báo cáo cũ, file `.bat` này sẽ tự động chuyển toàn bộ dữ liệu sang `data\reports\` rồi tạo liên kết.
+* Tác dụng: Mọi báo cáo Chrome tải về thư mục `%USERPROFILE%\Downloads\CE-Reports` sẽ được dẫn thẳng vào `data\raw_file\` bên trong bộ công cụ.
+* Nếu trước đó máy bạn đã có sẵn thư mục `Downloads\CE-Reports` chứa báo cáo cũ, file `.bat` này sẽ tự động chuyển toàn bộ dữ liệu sang `data\raw_file\` rồi tạo liên kết.
 
 ### 1.3. Cài đặt Chrome Extension
 1. Mở Chrome, truy cập địa chỉ: `chrome://extensions`
@@ -74,13 +74,13 @@ Chọn một trong hai chế độ phù hợp với nhu cầu lấy số liệu:
 
 ### Bước 4: Kiểm tra dữ liệu đã tải
 Các file tải về được tự động phân loại gọn gàng theo cấu trúc 3 tầng:
-`data\reports\<YYYY-MM-DD hoặc YYYY-MM>\<SELLER_ID>\`
+`data\raw_file\<YYYY-MM-DD hoặc YYYY-MM>\<SELLER_ID>\`
 
 Ví dụ cho ngày `2026-11-18` của shop `MY.TTK.7495640497701751442`:
 
 ```text
 data/
-└── reports/
+└── raw_file/
     └── 2026-11-18/
         └── MY.TTK.7495640497701751442/
             ├── 1_LIVE_Linked.xlsx
@@ -105,16 +105,16 @@ Sau khi đã tải xong báo cáo cho tất cả các shop và các ngày cần 
 .\.venv\Scripts\python.exe scripts\calculate_reports.py
 ```
 
-*(Tùy chọn nâng cao)* Nếu muốn chỉ định thư mục báo cáo, file danh sách shop hoặc đường dẫn file kết quả khác với mặc định, bạn có thể thêm các tham số sau:
+*(Tùy chọn nâng cao)* Nếu muốn chỉ định thư mục chứa file gốc, file danh sách shop hoặc đường dẫn file kết quả khác với mặc định, bạn có thể thêm các tham số sau:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\calculate_reports.py --reports-dir <thư_mục_reports> --seller-list <file_seller_list> --output <file_kết_quả>
+.\.venv\Scripts\python.exe scripts\calculate_reports.py --reports-dir <thư_mục_raw_file> --seller-list <file_seller_list> --output <file_kết_quả>
 ```
 
 ### Cấu trúc file Excel kết quả
-File tổng hợp được lưu tại: **`data\results\tiktok_content_metrics.xlsx`**
+File tổng hợp được lưu tại: **`data\reports\tiktok_content_metrics.xlsx`**
 
-* **Cách chia sheet:** Mỗi ngày (`YYYY-MM-DD`) hoặc tháng (`YYYY-MM`) có trong `data\reports\` sẽ tạo thành **1 sheet riêng** (ví dụ `2026-11-16`, `2026-11-18`). Mỗi sheet chứa số liệu của **toàn bộ các Seller ID** đã tải trong ngày/tháng đó.
+* **Cách chia sheet:** Mỗi ngày (`YYYY-MM-DD`) hoặc tháng (`YYYY-MM`) có trong `data\raw_file\` sẽ tạo thành **1 sheet riêng** (ví dụ `2026-11-16`, `2026-11-18`). Mỗi sheet chứa số liệu của **toàn bộ các Seller ID** đã tải trong ngày/tháng đó.
 * **Ý nghĩa các cột trong mỗi sheet:**
 
 | Tên cột | Mô tả chi tiết |
@@ -131,7 +131,7 @@ File tổng hợp được lưu tại: **`data\results\tiktok_content_metrics.xl
 
 ## Phần 4: Bước 3 — Dọn Dẹp Báo Cáo Cũ Để Tiết Kiệm Bộ Nhớ
 
-Sau thời gian dài sử dụng, thư mục `data\reports\` có thể chiếm nhiều dung lượng ổ cứng. Bạn có thể xóa nhanh toàn bộ dữ liệu báo cáo theo một khoảng ngày cụ thể (định dạng `YYYY-MM-DD`, tính cả ngày bắt đầu và ngày kết thúc).
+Sau thời gian dài sử dụng, thư mục `data\raw_file\` có thể chiếm nhiều dung lượng ổ cứng. Bạn có thể xóa nhanh toàn bộ dữ liệu báo cáo gốc theo một khoảng ngày cụ thể (định dạng `YYYY-MM-DD`, tính cả ngày bắt đầu và ngày kết thúc).
 
 ### 1. Xem trước các thư mục sẽ bị xóa (khuyên chạy trước để tránh xóa nhầm)
 ```powershell
@@ -146,8 +146,8 @@ Sau khi xác nhận đúng các ngày cần bỏ, bỏ `--dry-run` và chạy:
 ```
 
 > **Lưu ý:**
-> * Lệnh này chỉ xóa các thư mục ngày `YYYY-MM-DD` nằm trong khoảng `--start` đến `--end` bên trong `data\reports\` (bao gồm toàn bộ thư mục Seller ID và file bên trong các ngày đó).
-> * File Excel tổng hợp đã xuất trong `data\results\` và các thư mục tháng `YYYY-MM` sẽ **không** bị xóa bởi lệnh này.
+> * Lệnh này chỉ xóa các thư mục ngày `YYYY-MM-DD` nằm trong khoảng `--start` đến `--end` bên trong `data\raw_file\` (bao gồm toàn bộ thư mục Seller ID và file bên trong các ngày đó).
+> * File Excel tổng hợp đã xuất trong `data\reports\` và các thư mục tháng `YYYY-MM` sẽ **không** bị xóa bởi lệnh này.
 
 ---
 
@@ -161,7 +161,7 @@ Sau khi xác nhận đúng các ngày cần bỏ, bỏ `--dry-run` và chạy:
 * **Nguyên nhân:** Toàn bộ kênh Video hoặc LIVE cho ngày/tháng bạn vừa chọn chưa có báo cáo trên TikTok Seller Center (hoặc shop chưa phát sinh dữ liệu và nền tảng chưa hỗ trợ xuất).
 * **Cách xử lý:** Kiểm tra lại ngày bạn chọn trên popup đã đúng chưa, hoặc mở trực tiếp trang đó trên Seller Center để kiểm tra xem nền tảng đã hiển thị dữ liệu hay chưa.
 
-### 3. Extension hiện cảnh báo `⚠️ Please click Reload (🔄) on chrome://extensions to activate Reports/ folder routing.` hoặc file bị tải vào `Downloads` thay vì `data\reports\`
+### 3. Extension hiện cảnh báo `⚠️ Please click Reload (🔄) on chrome://extensions to activate Reports/ folder routing.` hoặc file bị tải vào `Downloads` thay vì `data\raw_file\`
 * **Cách xử lý:**
   1. Mở `chrome://extensions` và nhấn nút **Reload (🔄)** tại tiện ích **TikTok Content Calc**.
   2. Đảm bảo bạn đã chạy `scripts\setup-reports-junction.bat` ít nhất 1 lần.

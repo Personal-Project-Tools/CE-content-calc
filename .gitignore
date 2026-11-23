@@ -6,11 +6,11 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 
-# Runtime downloaded reports & generated Excel outputs
+# Runtime downloaded raw files & generated Excel outputs
+data/raw_file/*
+!data/raw_file/.gitkeep
 data/reports/*
 !data/reports/.gitkeep
-data/results/*
-!data/results/.gitkeep
 
 # Temporary, Office lock, and local OS files
 ~$*.xlsx
