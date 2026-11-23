@@ -148,7 +148,7 @@ function resolveDownloadSuggestion(downloadItem, suggest) {
   const reportPrefix =
     (reportKey && REPORT_PREFIX_MAP[reportKey]) || sanitizeFilenamePart(rawStem, 'report');
 
-  const relativePath = `CE-Reports/${sellerId}_${periodLabel}/${reportPrefix}${ext}`;
+  const relativePath = `CE-Reports/${periodLabel}/${sellerId}/${reportPrefix}${ext}`;
   suggest({ filename: relativePath, conflictAction: 'overwrite' });
 }
 
@@ -254,7 +254,7 @@ async function sendMessageWithAutoInject(tabId, payload) {
           if (chrome.scripting) {
             await chrome.scripting.executeScript({
               target: { tabId },
-              files: ['content.js']
+              files: ['src/content/content.js']
             });
             await sleep(300);
             chrome.tabs.sendMessage(tabId, payload, (retryResponse) => {

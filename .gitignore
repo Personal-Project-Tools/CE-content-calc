@@ -1,3 +1,20 @@
+# Python & Virtual Environment
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+
+# Runtime downloaded reports & generated Excel outputs
+data/reports/*
+!data/reports/.gitkeep
+data/results/*
+!data/results/.gitkeep
+
+# Temporary, Office lock, and local OS files
+~$*.xlsx
 Note.txt
-Reports/*
-!Reports/.gitkeep
+temp/
+.DS_Store
+Thumbs.db

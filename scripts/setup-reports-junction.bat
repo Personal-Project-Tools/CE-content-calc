@@ -1,9 +1,9 @@
 @echo off
 setlocal EnableExtensions
 
-set "REPO_DIR=%~dp0"
+for %%I in ("%~dp0..") do set "REPO_DIR=%%~fI"
 if "%REPO_DIR:~-1%"=="\" set "REPO_DIR=%REPO_DIR:~0,-1%"
-set "REPORTS_DIR=%REPO_DIR%\Reports"
+set "REPORTS_DIR=%REPO_DIR%\data\reports"
 
 if not exist "%REPORTS_DIR%" (
     mkdir "%REPORTS_DIR%"
