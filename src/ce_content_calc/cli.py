@@ -24,9 +24,11 @@ def _build_calculate_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--reports-dir",
+        "--raw-dir",
+        dest="reports_dir",
         type=Path,
         default=DEFAULT_REPORTS_DIR,
-        help="Input reports directory containing {date}/{seller_id}/ folders.",
+        help="Input raw files directory (data/raw_file/) containing {date}/{seller_id}/ folders.",
     )
     parser.add_argument(
         "--seller-list",
@@ -38,14 +40,14 @@ def _build_calculate_parser() -> argparse.ArgumentParser:
         "--output",
         type=Path,
         default=DEFAULT_OUTPUT_FILE,
-        help="Output .xlsx file path.",
+        help="Output .xlsx file path (default: data/reports/tiktok_content_metrics.xlsx).",
     )
     return parser
 
 
 def _build_delete_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Delete downloaded TikTok report folders inside data/reports/ for a YYYY-MM-DD date range."
+        description="Delete downloaded TikTok raw report folders inside data/raw_file/ for a YYYY-MM-DD date range."
     )
     parser.add_argument(
         "--start",
@@ -59,9 +61,11 @@ def _build_delete_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--reports-dir",
+        "--raw-dir",
+        dest="reports_dir",
         type=Path,
         default=DEFAULT_REPORTS_DIR,
-        help="Target reports directory containing YYYY-MM-DD folders.",
+        help="Target raw files directory (data/raw_file/) containing YYYY-MM-DD folders.",
     )
     parser.add_argument(
         "--dry-run",
@@ -118,8 +122,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not args_list or args_list[0] in ("-h", "--help"):
         print("Usage: python -m ce_content_calc <calculate|delete> [options]")
         print("\nSubcommands:")
-        print("  calculate   Aggregate metrics from data/reports/ into data/results/")
-        print("  delete      Delete YYYY-MM-DD folders inside data/reports/ in a date range")
+        print("  calculate   Aggregate metrics from data/raw_file/ into data/reports/")
+        print("  delete      Delete YYYY-MM-DD folders inside data/raw_file/ in a date range")
         return 0
 
     cmd, rest = args_list[0], args_list[1:]

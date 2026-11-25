@@ -3,7 +3,7 @@ setlocal EnableExtensions
 
 for %%I in ("%~dp0..") do set "REPO_DIR=%%~fI"
 if "%REPO_DIR:~-1%"=="\" set "REPO_DIR=%REPO_DIR:~0,-1%"
-set "REPORTS_DIR=%REPO_DIR%\data\reports"
+set "REPORTS_DIR=%REPO_DIR%\data\raw_file"
 
 if not exist "%REPORTS_DIR%" (
     mkdir "%REPORTS_DIR%"

@@ -165,7 +165,7 @@ def collect_metrics_by_date(
     reports_dir: Path,
     seller_mapping: dict[str, list[tuple[str, str]]] | None = None,
 ) -> dict[str, list[dict[str, object]]]:
-    """Scan data/reports/{date}/{seller_id}/*.xlsx (and legacy flat folders) grouped by date."""
+    """Scan data/raw_file/{date}/{seller_id}/*.xlsx (and legacy flat folders) grouped by date."""
     if not reports_dir.exists():
         raise FileNotFoundError(f"Reports directory does not exist: {reports_dir}")
 
@@ -176,7 +176,7 @@ def collect_metrics_by_date(
         if not entry.is_dir():
             continue
 
-        # 3-level structure: data/reports/{date}/{seller_id}/*.xlsx
+        # 3-level structure: data/raw_file/{date}/{seller_id}/*.xlsx
         for seller_dir in sorted(sub for sub in entry.iterdir() if sub.is_dir()):
             sub_xlsx = sorted(
                 f
