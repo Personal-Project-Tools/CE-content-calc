@@ -40,4 +40,19 @@ if errorlevel 1 (
 )
 
 echo [OK] Junction created: "%JUNCTION_PATH%" -^> "%REPORTS_DIR%"
+
+set "CONFIG_DIR=%REPO_DIR%\config"
+set "EXT_CONFIG_JUNCTION=%REPO_DIR%\extension\config"
+
+if exist "%EXT_CONFIG_JUNCTION%" (
+    powershell -NoProfile -Command "$p = $env:EXT_CONFIG_JUNCTION; $item = Get-Item -LiteralPath $p -Force; if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { [IO.Directory]::Delete($item.FullName); exit 0 }; Remove-Item -LiteralPath $p -Recurse -Force; exit 0"
+)
+
+mklink /J "%EXT_CONFIG_JUNCTION%" "%CONFIG_DIR%"
+if errorlevel 1 (
+    echo [ERROR] Failed to create extension config junction.
+    exit /b 1
+)
+
+echo [OK] Junction created: "%EXT_CONFIG_JUNCTION%" -^> "%CONFIG_DIR%"
 endlocal

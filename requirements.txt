@@ -1,10 +1,4 @@
-# CE-content-calc runtime requirements
-# -----------------------------------------------------------------------------
-# This project uses 100% Python Standard Library modules (zipfile, xml.etree,
-# pathlib, argparse, datetime, shutil, re, unittest) and requires NO external
-# third-party packages to run `scripts/calculate_reports.py` or `scripts/delete_reports.py`.
-#
-# Python version required: >= 3.11
-#
-# (Optional) To install the package in editable mode with CLI entrypoints:
-# -e .
+# CE-content-calc runtime requirements (Python >= 3.11)
+google-auth>=2.20.0
+gspread>=6.0.0
+PyYAML>=6.0

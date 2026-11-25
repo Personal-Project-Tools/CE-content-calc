@@ -1,6 +1,6 @@
 # Hướng Dẫn Sử Dụng Bộ Công Cụ Báo Cáo TikTok Content
 
-Tài liệu này hướng dẫn đầy đủ quy trình vận hành hằng ngày cho người sử dụng cuối: từ thiết lập máy ban đầu, tự động tải báo cáo trên TikTok Seller Center, tổng hợp số liệu ra file Excel chung theo từng khách hàng/ngày, đến dọn dẹp dữ liệu cũ để tiết kiệm bộ nhớ máy tính.
+Tài liệu này hướng dẫn đầy đủ quy trình vận hành hằng ngày cho người sử dụng cuối: từ thiết lập máy ban đầu, tự động tải báo cáo trên TikTok Seller Center, tổng hợp số liệu ra file Excel chung theo từng khách hàng/ngày (đối chiếu tự động từ Google Sheets nội bộ), đến dọn dẹp dữ liệu cũ để tiết kiệm bộ nhớ máy tính.
 
 ---
 
@@ -9,7 +9,7 @@ Tài liệu này hướng dẫn đầy đủ quy trình vận hành hằng ngày
 | Bước | Công cụ sử dụng | Việc cần làm | Kết quả nhận được |
 |---|---|---|---|
 | **Bước 1** | Chrome Extension (**TikTok Content Calc**) | Chọn shop → chọn ngày/tháng → bấm tự động xuất báo cáo | Tối đa 4 file báo cáo gốc được tự động xếp vào `data\raw_file\<Ngày>\<Seller ID>\` |
-| **Bước 2** | Terminal (`calculate_reports.py`) | Chạy lệnh tổng hợp số liệu & ghép tên khách hàng | Xuất ra 1 file Excel tổng tại `data\reports\tiktok_content_metrics.xlsx` (chia sheet theo ngày) |
+| **Bước 2** | Terminal (`calculate_reports.py`) | Chạy lệnh tổng hợp số liệu & tự động đối chiếu khách hàng qua Google Sheets | Xuất ra 1 file Excel tổng tại `data\reports\tiktok_content_metrics.xlsx` (chia sheet theo ngày) |
 | **Bước 3** | Terminal (`delete_reports.py`) | Xóa các thư mục ngày cũ không còn dùng trong `data\raw_file\` | Giải phóng dung lượng ổ cứng, giữ lại file kết quả tổng hợp |
 
 ---
@@ -37,12 +37,28 @@ Chạy file `scripts\setup-reports-junction.bat` (nhấp đúp trực tiếp ho�
 
 > **Lưu ý:** Mỗi khi bộ công cụ có cập nhật mới, hãy vào lại `chrome://extensions` và nhấn biểu tượng **Reload (🔄)** tại thẻ của tiện ích này.
 
-### 1.4. Kiểm tra và cập nhật danh sách Shop / Khách hàng
-File **`config\seller_list.xlsx`** là bảng đối chiếu để công cụ điền tên khách hàng (`Clients`) và tên định danh đầy đủ (`Seller ID`) vào báo cáo cuối cùng.
+### 1.4. Cài đặt thư viện Python & Cấu hình kết nối Google Sheets (Bảo mật nội bộ)
+Để đảm bảo bảo mật dữ liệu khách hàng (Data Privacy), thông tin đối chiếu `Clients <-> Seller ID` không lưu trực tiếp trên Git mà được đọc qua Google Service Account từ bảng Google Sheets nội bộ:
 
-* File gồm 2 cột chính: **`Clients`** và **`Seller ID`** (ví dụ: `Abbott` | `abbott - MY.TTK.7495640497701751442`).
-* Nếu một khách hàng có nhiều shop, bạn có thể gộp ô (merge) theo chiều dọc ở cột `Clients` — công cụ tự hiểu các dòng Seller ID trong nhóm đó thuộc cùng một khách hàng.
-* Khi có thêm shop mới cần theo dõi, chỉ cần mở `config\seller_list.xlsx`, thêm dòng mới và nhấn Lưu trước khi chạy Bước 2.
+1. Cài đặt các thư viện cần thiết vào môi trường Python (`>= 3.11`):
+   ```powershell
+   pip install -r requirements.txt
+   ```
+2. Đặt file khóa JSON của Google Service Account vào `config\service.json` (file này đã được ẩn trong `.gitignore`). Đảm bảo Google Sheet nội bộ đã cấp quyền **Viewer** cho địa chỉ `client_email` trong `service.json`.
+3. Tạo file `config\sheet.yaml` dựa trên bản mẫu [config/sheet.example.yaml](config/sheet.example.yaml) và điền `spreadsheet_id` thực tế:
+   ```yaml
+   sheet:
+     credentials_file: "config/service.json"
+     spreadsheet_id: "<YOUR_GOOGLE_SPREADSHEET_ID>"
+     worksheet: "seller_scope"
+     ranges:
+       seller_full_match: "AV4:AV"  # Định dạng: <company> - <COUNTRY>.TTK.<SELLER_ID>
+       seller_used_id: "AW4:AW"     # Định dạng: <COUNTRY>.TTK.<SELLER_ID>
+       active_status: "I4:I"        # Trạng thái Active selling (TRUE / FALSE)
+     filters:
+       platform: "TTK"
+       active_only: true            # Chỉ đối chiếu các shop có active_status == TRUE
+   ```
 
 ---
 
@@ -76,13 +92,13 @@ Chọn một trong hai chế độ phù hợp với nhu cầu lấy số liệu:
 Các file tải về được tự động phân loại gọn gàng theo cấu trúc 3 tầng:
 `data\raw_file\<YYYY-MM-DD hoặc YYYY-MM>\<SELLER_ID>\`
 
-Ví dụ cho ngày `2026-11-18` của shop `MY.TTK.7495640497701751442`:
+Ví dụ cho ngày `2026-11-18` của shop `MY.TTK.1000000000000000001`:
 
 ```text
 data/
 └── raw_file/
     └── 2026-11-18/
-        └── MY.TTK.7495640497701751442/
+        └── MY.TTK.1000000000000000001/
             ├── 1_LIVE_Linked.xlsx
             ├── 2_LIVE_Affiliate.xlsx
             ├── 3_Video_Linked.xlsx
@@ -102,13 +118,13 @@ Sau khi đã tải xong báo cáo cho tất cả các shop và các ngày cần 
 2. Chạy lệnh sau:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\calculate_reports.py
+python scripts\calculate_reports.py
 ```
 
-*(Tùy chọn nâng cao)* Nếu muốn chỉ định thư mục chứa file gốc, file danh sách shop hoặc đường dẫn file kết quả khác với mặc định, bạn có thể thêm các tham số sau:
+*(Tùy chọn nâng cao)* Bạn có thể truyền thêm tham số tùy chỉnh đường dẫn cấu hình hoặc file `.xlsx` offline nếu cần:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\calculate_reports.py --reports-dir <thư_mục_raw_file> --seller-list <file_seller_list> --output <file_kết_quả>
+python scripts\calculate_reports.py --reports-dir <thư_mục_raw_file> --sheet-config config\sheet.yaml --output <file_kết_quả>
 ```
 
 ### Cấu trúc file Excel kết quả
@@ -119,8 +135,8 @@ File tổng hợp được lưu tại: **`data\reports\tiktok_content_metrics.xl
 
 | Tên cột | Mô tả chi tiết |
 |---|---|
-| **`Clients`** | Tên khách hàng được đối chiếu từ `config\seller_list.xlsx`. Nếu mã shop chưa có trong danh sách sẽ hiển thị `Unmapped`. |
-| **`Seller ID`** | Tên Seller ID đầy đủ lấy từ `config\seller_list.xlsx` (nếu `Unmapped` sẽ giữ nguyên mã `<QUỐC_GIA>.TTK.<SELLER_ID>` của thư mục tải về). |
+| **`Clients`** | Tên khách hàng (`<company>`) tách từ cột `seller_full_match` (`AV4:AV`) trên tab `seller_scope`. Nếu mã shop chưa có trên Google Sheet sẽ hiển thị `Unmapped`. |
+| **`Seller ID`** | Tên Seller ID đầy đủ (`<company> - <QUỐC_GIA>.TTK.<SELLER_ID>`) lấy từ cột `AV4:AV` (nếu `Unmapped` sẽ giữ nguyên mã `<QUỐC_GIA>.TTK.<SELLER_ID>` của thư mục tải về). |
 | **`Date`** | Ngày hoặc tháng tương ứng của báo cáo (`YYYY-MM-DD` hoặc `YYYY-MM`). |
 | **`Content Type`** | Mỗi shop trong ngày có 2 dòng tách biệt: **`TikTok Content Live`** và **`TikTok Content Video`**. |
 | **`revenue`** | Tổng doanh thu: dòng LIVE cộng cột `LIVE-attributed GMV` từ 2 file LIVE; dòng Video cộng cột `Video-attributed GMV` từ 2 file Video. |
@@ -135,14 +151,14 @@ Sau thời gian dài sử dụng, thư mục `data\raw_file\` có thể chiếm 
 
 ### 1. Xem trước các thư mục sẽ bị xóa (khuyên chạy trước để tránh xóa nhầm)
 ```powershell
-.\.venv\Scripts\python.exe scripts\delete_reports.py --start '2026-11-15' --end '2026-11-18' --dry-run
+python scripts\delete_reports.py --start '2026-11-15' --end '2026-11-18' --dry-run
 ```
 Lệnh `--dry-run` **chỉ in ra danh sách các thư mục nằm trong khoảng ngày đã chọn** để bạn kiểm tra, hoàn toàn không xóa dữ liệu thật.
 
 ### 2. Thực hiện xóa chính thức
 Sau khi xác nhận đúng các ngày cần bỏ, bỏ `--dry-run` và chạy:
 ```powershell
-.\.venv\Scripts\python.exe scripts\delete_reports.py --start '2026-11-15' --end '2026-11-18'
+python scripts\delete_reports.py --start '2026-11-15' --end '2026-11-18'
 ```
 
 > **Lưu ý:**
@@ -168,8 +184,8 @@ Sau khi xác nhận đúng các ngày cần bỏ, bỏ `--dry-run` và chạy:
   3. Kiểm tra lại mục `chrome://settings/downloads` đã tắt tùy chọn *Ask where to save each file before downloading* chưa.
 
 ### 4. Trong file Excel kết quả, cột `Clients` bị ghi là `Unmapped`
-* **Nguyên nhân:** Mã Seller ID của shop vừa tải chưa được thêm vào file `config\seller_list.xlsx`, hoặc số Seller ID bị khác với danh sách hiện tại.
-* **Cách xử lý:** Mở `config\seller_list.xlsx`, bổ sung chính xác dòng `Clients` và `Seller ID` cho shop đó, lưu file lại rồi chạy lại lệnh `.\.venv\Scripts\python.exe scripts\calculate_reports.py`.
+* **Nguyên nhân:** Mã Seller ID của shop vừa tải chưa có trên tab `seller_scope` của Google Sheet nội bộ (cột `AV4:AV` / `AW4:AW`).
+* **Cách xử lý:** Bổ sung shop mới vào tab `seller_scope` trên Google Sheet, sau đó chạy lại lệnh `python scripts\calculate_reports.py`.
 
 ### 5. Popup luôn báo `No Seller ID Detected`
 * **Cách xử lý:** Đảm bảo bạn đã đăng nhập đúng tài khoản TikTok Seller Center trên Chrome, nhấn **Open TikTok Seller Center** (hoặc chuyển sang tab của shop đó), chờ trang tải đầy đủ thông tin rồi nhấn **Refresh** trên popup.

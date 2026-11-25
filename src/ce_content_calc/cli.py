@@ -12,9 +12,12 @@ from ce_content_calc.cleanup import delete_reports_in_range, parse_cli_date
 from ce_content_calc.config import (
     DEFAULT_OUTPUT_FILE,
     DEFAULT_REPORTS_DIR,
-    DEFAULT_SELLER_LIST_FILE,
+    DEFAULT_SHEET_CONFIG_FILE,
 )
-from ce_content_calc.seller_mapping import load_seller_mapping
+from ce_content_calc.seller_mapping import (
+    load_seller_mapping,
+    load_seller_mapping_from_sheet,
+)
 from ce_content_calc.xlsx_io import write_results_xlsx
 
 
@@ -31,10 +34,24 @@ def _build_calculate_parser() -> argparse.ArgumentParser:
         help="Input raw files directory (data/raw_file/) containing {date}/{seller_id}/ folders.",
     )
     parser.add_argument(
+        "--sheet-config",
+        type=Path,
+        default=DEFAULT_SHEET_CONFIG_FILE,
+        help="Path to Google Sheets YAML config (default: config/sheet.yaml).",
+    )
+    parser.add_argument(
+        "--credentials",
+        "--service-account",
+        dest="credentials",
+        type=Path,
+        default=None,
+        help="Optional override path to Google Service Account JSON key.",
+    )
+    parser.add_argument(
         "--seller-list",
         type=Path,
-        default=DEFAULT_SELLER_LIST_FILE,
-        help="Path to seller_list.xlsx mapping Clients and full Seller IDs.",
+        default=None,
+        help="Optional local .xlsx mapping file override (skips Google Sheets API if provided).",
     )
     parser.add_argument(
         "--output",
@@ -78,7 +95,19 @@ def _build_delete_parser() -> argparse.ArgumentParser:
 def main_calculate(argv: Sequence[str] | None = None) -> int:
     """Execute the report aggregation CLI."""
     args = _build_calculate_parser().parse_args(argv)
-    seller_mapping = load_seller_mapping(args.seller_list)
+
+    try:
+        if args.seller_list is not None:
+            seller_mapping = load_seller_mapping(args.seller_list)
+        else:
+            seller_mapping = load_seller_mapping_from_sheet(
+                args.sheet_config,
+                credentials_override=args.credentials,
+            )
+    except (FileNotFoundError, ValueError, RuntimeError) as err:
+        print(f"Error: {err}", file=sys.stderr)
+        return 2
+
     results_by_date = collect_metrics_by_date(args.reports_dir, seller_mapping)
 
     if not results_by_date:
@@ -91,7 +120,7 @@ def main_calculate(argv: Sequence[str] | None = None) -> int:
         print(f"\n=== Sheet: {date_str} ===")
         for row in rows:
             print(
-                f"  {str(row['client']):<16} | {row['seller_id']} | {str(row['content_type']):<22} | "
+                f"  {str(row['client']):<18} | {row['seller_id']} | {str(row['content_type']):<22} | "
                 f"revenue={row['revenue']:>10.2f} | "
                 f"product_impression={row['product_impression']:>10,} | "
                 f"impression={row['impression']:>10,}"

@@ -6,6 +6,24 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 
+# Credentials, secrets & internal mapping configs
+.env
+.env.*
+!.env.example
+config/service.json
+config/*service*.json
+config/*credentials*.json
+config/*secret*.json
+!config/*.example.json
+config/sheet.yaml
+!config/sheet.example.yaml
+config/seller_list.xlsx
+extension/config
+extension/config/
+config/sheet.yaml
+!config/*.example.yaml
+config/seller_list.xlsx
+
 # Runtime downloaded raw files & generated Excel outputs
 data/raw_file/*
 !data/raw_file/.gitkeep
@@ -18,3 +36,4 @@ Note.txt
 temp/
 .DS_Store
 Thumbs.db
+logs/

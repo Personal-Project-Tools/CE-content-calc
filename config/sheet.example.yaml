@@ -1,0 +1,11 @@
+sheet:
+  credentials_file:
+  spreadsheet_id:
+  worksheet:
+  ranges:
+    seller_full_match:
+    seller_used_id:
+    active_status:
+  filters:
+    platform:
+    active_only:

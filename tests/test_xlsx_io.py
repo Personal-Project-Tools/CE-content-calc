@@ -62,8 +62,8 @@ def _build_minimal_shared_strings_xlsx(path: Path) -> None:
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'
         '<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>'
-        '<row r="2"><c r="A2" t="inlineStr"><is><t>Abbott</t></is></c>'
-        '<c r="B2" t="inlineStr"><is><t>abbott - MY.TTK.123</t></is></c></row>'
+        '<row r="2"><c r="A2" t="inlineStr"><is><t>client_alpha</t></is></c>'
+        '<c r="B2" t="inlineStr"><is><t>client_alpha - MY.TTK.123</t></is></c></row>'
         "</sheetData></worksheet>"
     )
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -83,7 +83,7 @@ class XlsxIoTests(unittest.TestCase):
 
             rows = read_xlsx_rows(xlsx_path)
             self.assertEqual(rows[0], ["Clients", "Seller ID"])
-            self.assertEqual(rows[1], ["Abbott", "abbott - MY.TTK.123"])
+            self.assertEqual(rows[1], ["client_alpha", "client_alpha - MY.TTK.123"])
 
     def test_write_results_xlsx_creates_date_sheets(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -91,8 +91,8 @@ class XlsxIoTests(unittest.TestCase):
             results_by_date = {
                 "2026-11-15": [
                     {
-                        "client": "Abbott",
-                        "seller_id": "abbott - MY.TTK.1",
+                        "client": "client_alpha",
+                        "seller_id": "client_alpha - MY.TTK.1",
                         "date": "2026-11-15",
                         "content_type": "TikTok Content Live",
                         "revenue": 120.5,
@@ -102,8 +102,8 @@ class XlsxIoTests(unittest.TestCase):
                 ],
                 "2026-11-16": [
                     {
-                        "client": "Golden ABC",
-                        "seller_id": "golden_abc - PH.TTK.2",
+                        "client": "client_beta",
+                        "seller_id": "client_beta - PH.TTK.2",
                         "date": "2026-11-16",
                         "content_type": "TikTok Content Video",
                         "revenue": 0.0,
@@ -120,5 +120,5 @@ class XlsxIoTests(unittest.TestCase):
                 self.assertIn('name="2026-11-15"', wb_xml)
                 self.assertIn('name="2026-11-16"', wb_xml)
                 sheet2_xml = zf.read("xl/worksheets/sheet2.xml").decode("utf-8")
-                self.assertIn("Golden ABC", sheet2_xml)
-                self.assertIn("golden_abc - PH.TTK.2", sheet2_xml)
+                self.assertIn("client_beta", sheet2_xml)
+                self.assertIn("client_beta - PH.TTK.2", sheet2_xml)

@@ -125,14 +125,14 @@ class CalculatorTests(unittest.TestCase):
                 data_rows=[["u1", "85", "a", "190", "12.34"]],
             )
 
-            mapping = {"PH.TTK.100": [("Golden ABC", "golden_abc - PH.TTK.100")]}
+            mapping = {"PH.TTK.100": [("client_alpha", "client_alpha - PH.TTK.100")]}
             grouped = collect_metrics_by_date(reports_dir, mapping)
 
             self.assertIn("2026-11-18", grouped)
             rows = grouped["2026-11-18"]
             self.assertEqual(len(rows), 2)
-            self.assertEqual(rows[0]["client"], "Golden ABC")
-            self.assertEqual(rows[0]["seller_id"], "golden_abc - PH.TTK.100")
+            self.assertEqual(rows[0]["client"], "client_alpha")
+            self.assertEqual(rows[0]["seller_id"], "client_alpha - PH.TTK.100")
             self.assertEqual(rows[0]["content_type"], CONTENT_TYPES["live"])
             self.assertEqual(rows[0]["revenue"], 0.0)
             self.assertEqual(rows[1]["content_type"], CONTENT_TYPES["video"])

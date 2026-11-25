@@ -22,13 +22,13 @@
     const parsedShops = [];
 
     // Loop through keys in sellers_data
-    // e.g. "7494520748649907971": { global_seller: { base_region: "MY", seller_name: "WD-40 Malaysia", ... } }
+    // e.g. "7000000000000000001": { global_seller: { base_region: "MY", seller_name: "Sample Official Store", ... } }
     for (const [sellerKey, sellerInfo] of Object.entries(sellersData)) {
       if (!sellerInfo || typeof sellerInfo !== 'object') continue;
 
       const globalSeller = sellerInfo.global_seller || {};
       const country = (globalSeller.base_region || 'UNKNOWN').toUpperCase();
-      const seller = sellerKey; // e.g. 7494520748649907971
+      const seller = sellerKey; // e.g. 7000000000000000001
 
       // Format requirement: country.TTK.seller
       const formattedSellerId = `${country}.TTK.${seller}`;
