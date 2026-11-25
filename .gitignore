@@ -16,13 +16,13 @@ config/*credentials*.json
 config/*secret*.json
 !config/*.example.json
 config/sheet.yaml
-!config/sheet.example.yaml
+config/sheet_content.yaml
+config/sheet_config.yaml
+config/sheet*.yaml
+!config/*.example.yaml
 config/seller_list.xlsx
 extension/config
 extension/config/
-config/sheet.yaml
-!config/*.example.yaml
-config/seller_list.xlsx
 
 # Runtime downloaded raw files & generated Excel outputs
 data/raw_file/*

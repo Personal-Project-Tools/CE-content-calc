@@ -254,7 +254,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadWorkflowState();
 
   // Verify background service worker is up-to-date and downloads.onDeterminingFilename is active
-  const EXPECTED_BG_VERSION = '2.2.0';
+  const EXPECTED_BG_VERSION = '2.2.1';
   chrome.runtime.sendMessage({ action: 'CHECK_BACKGROUND_READY' }, (res) => {
     if (chrome.runtime.lastError || !res || !res.ok) {
       renderWorkflowLog({
@@ -285,11 +285,28 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  function isSupportedSellerUrl(rawUrl) {
+    if (!rawUrl) return false;
+    try {
+      const host = new URL(rawUrl).hostname.toLowerCase();
+      return (
+        (host.includes('seller') && (host.includes('tiktok.com') || host.includes('tokopedia.com'))) ||
+        host.includes('tiktokglobalshop.com') ||
+        host.includes('id.tokopedia.com')
+      );
+    } catch {
+      return false;
+    }
+  }
+
   function buildFallbackReportUrls(country, tabUrl) {
     const region = (country || 'SG').toUpperCase();
-    let origin = `https://seller-${region.toLowerCase()}.tiktok.com`;
+    let origin =
+      region === 'ID'
+        ? 'https://seller-id.tokopedia.com'
+        : `https://seller-${region.toLowerCase()}.tiktok.com`;
     try {
-      if (tabUrl && tabUrl.includes('tiktok')) {
+      if (tabUrl && (tabUrl.includes('tiktok') || tabUrl.includes('tokopedia'))) {
         origin = new URL(tabUrl).origin;
       }
     } catch {
@@ -308,10 +325,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Check active tab domain
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     const activeTab = tabs[0];
-    const isTikTokTab =
-      activeTab?.url &&
-      ((activeTab.url.includes('seller') && activeTab.url.includes('tiktok.com')) ||
-        activeTab.url.includes('tiktokglobalshop.com'));
+    const isTikTokTab = isSupportedSellerUrl(activeTab?.url);
 
     if (isTikTokTab) {
       statusBadge.className = 'status-badge status-connected';

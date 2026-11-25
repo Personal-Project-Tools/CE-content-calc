@@ -12,6 +12,7 @@
   "host_permissions": [
     "https://*.tiktok.com/*",
     "https://*.tiktokglobalshop.com/*",
+    "https://*.tokopedia.com/*",
     "https://oauth2.googleapis.com/*",
     "https://sheets.googleapis.com/*"
   ],
@@ -31,7 +32,8 @@
     {
       "matches": [
         "https://*.tiktok.com/*",
-        "https://*.tiktokglobalshop.com/*"
+        "https://*.tiktokglobalshop.com/*",
+        "https://*.tokopedia.com/*"
       ],
       "js": ["src/content/injected.js"],
       "world": "MAIN",
@@ -40,7 +42,8 @@
     {
       "matches": [
         "https://*.tiktok.com/*",
-        "https://*.tiktokglobalshop.com/*"
+        "https://*.tiktokglobalshop.com/*",
+        "https://*.tokopedia.com/*"
       ],
       "js": ["src/content/content.js"],
       "run_at": "document_start"

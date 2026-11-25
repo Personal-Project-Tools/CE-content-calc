@@ -1,4 +1,4 @@
-const BG_VERSION = '2.2.0';
+const BG_VERSION = '2.2.1';
 
 const REPORT_PREFIX_MAP = {
   live_linked: '1_LIVE_Linked',
@@ -10,6 +10,7 @@ const REPORT_PREFIX_MAP = {
 const EXPECTED_DOWNLOAD_TTL_MS = 60000;
 const TIKTOK_DOMAIN_KEYWORDS = [
   'tiktok',
+  'tokopedia',
   'oecstatic',
   'byted',
   'byteintl',
@@ -445,7 +446,15 @@ if (chrome.downloads && chrome.downloads.onDeterminingFilename) {
 if (chrome.downloads && chrome.downloads.onCreated) {
   chrome.downloads.onCreated.addListener((downloadItem) => {
     const now = Date.now();
-    chrome.tabs.query({ url: ['https://*.tiktok.com/*', 'https://*.tiktokglobalshop.com/*'] }, (tabs) => {
+    chrome.tabs.query(
+      {
+        url: [
+          'https://*.tiktok.com/*',
+          'https://*.tiktokglobalshop.com/*',
+          'https://*.tokopedia.com/*'
+        ]
+      },
+      (tabs) => {
       for (const tab of tabs) {
         if (tab.id) {
           chrome.tabs.sendMessage(
