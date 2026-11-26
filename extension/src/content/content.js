@@ -24,8 +24,10 @@
 
   const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   let isWorkflowRunning = false;
+  let activeWorkflowSellerId = null;
   let lastDownloadTimestamp = 0;
   let lastExportTaskCreatedTimestamp = 0;
+  let bgHeartbeatActive = false;
 
   // Remove legacy on-page toast if present
   const existingToast = document.getElementById('ttk-ext-toast');
@@ -36,9 +38,9 @@
   // --- Utility & XPath Helpers ---
 
   /**
-   * Disables CSS transition/animation delays on opening Arco Design popups so background tabs
+   * Shortens CSS transition/animation durations to 1ms on Arco Design popups so background tabs
    * (where Chromium suspends CSS animation frames) never leave opening popups stuck at opacity: 0,
-   * while allowing exiting/hidden popups to close immediately.
+   * while still firing transitionend/animationend events normally.
    */
   function ensureBackgroundPopupStyleFix() {
     if (document.getElementById('ttk-ext-bg-popup-fix')) return;
@@ -50,10 +52,10 @@
       [class*="trigger-popup"]:not([class*="exit"]):not([class*="leave"]):not([class*="hidden"]),
       [class*="picker-container"]:not([class*="exit"]):not([class*="leave"]):not([class*="hidden"]),
       [class*="picker-dropdown"]:not([class*="exit"]):not([class*="leave"]):not([class*="hidden"]) {
-        transition: none !important;
-        transition-duration: 0s !important;
-        animation: none !important;
-        animation-duration: 0s !important;
+        transition-duration: 0.001s !important;
+        transition-delay: 0s !important;
+        animation-duration: 0.001s !important;
+        animation-delay: 0s !important;
         opacity: 1 !important;
       }
       .arco-trigger[class*="exit"],
@@ -63,10 +65,10 @@
       [class*="arco-fade-leave"],
       [class*="arco-zoom"][class*="exit"],
       [class*="arco-zoom"][class*="leave"] {
-        transition: none !important;
-        transition-duration: 0s !important;
-        animation: none !important;
-        animation-duration: 0s !important;
+        transition-duration: 0.001s !important;
+        transition-delay: 0s !important;
+        animation-duration: 0.001s !important;
+        animation-delay: 0s !important;
         opacity: 0 !important;
         pointer-events: none !important;
         display: none !important;
@@ -81,6 +83,30 @@
     } catch {
       // ignore
     }
+  }
+
+  function startBackgroundRafHeartbeat() {
+    if (bgHeartbeatActive) return;
+    bgHeartbeatActive = true;
+    const tick = () => {
+      if (!bgHeartbeatActive) return;
+      flushMainWorldRaf();
+      try {
+        chrome.runtime.sendMessage({ action: 'BACKGROUND_SLEEP', ms: 80 }, () => {
+          void chrome.runtime.lastError;
+          if (bgHeartbeatActive) {
+            tick();
+          }
+        });
+      } catch {
+        bgHeartbeatActive = false;
+      }
+    };
+    tick();
+  }
+
+  function stopBackgroundRafHeartbeat() {
+    bgHeartbeatActive = false;
   }
 
   /**
@@ -901,6 +927,7 @@
 
   async function waitForDownloadOrTaskSince(timestampMs, waitMs = 4500) {
     const start = Date.now();
+    let sawButtonBusyAfterClick = false;
     while (Date.now() - start < waitMs) {
       if (lastDownloadTimestamp >= timestampMs) {
         return 'download';
@@ -908,13 +935,18 @@
       if (lastExportTaskCreatedTimestamp >= timestampMs) {
         return 'task';
       }
-      const curBtn = findExportButton();
-      if (hasNoAvailableData() || (curBtn && isExportButtonDisabled(curBtn))) {
+      if (hasNoAvailableData()) {
         return 'empty';
+      }
+      const curBtn = findExportButton();
+      // If the Export button was enabled before our click and is now disabled/loading,
+      // TikTok Seller Center is actively generating the export task!
+      if (curBtn && isExportButtonDisabled(curBtn)) {
+        sawButtonBusyAfterClick = true;
       }
       await sleep(250);
     }
-    return null;
+    return sawButtonBusyAfterClick ? 'task' : null;
   }
 
   async function waitForExportAttempt(clickTime, attemptNum, reportKey, initialWaitMs) {
@@ -935,19 +967,21 @@
   }
 
   async function notifyExpectedDownload(reportKey, periodConfig) {
-    let sellerId = null;
-    try {
-      const stored = await Promise.race([
-        new Promise((resolve) => {
-          chrome.storage.local.get(['ttk_seller_payload'], (res) => resolve(res || {}));
-        }),
-        sleep(300)
-      ]);
-      const sellerPayload = stored?.ttk_seller_payload;
-      const activeShop = sellerPayload?.active_shop || sellerPayload?.shops?.[0];
-      sellerId = activeShop?.formatted_seller_id || null;
-    } catch (e) {
-      sellerId = null;
+    let sellerId = activeWorkflowSellerId || null;
+    if (!sellerId) {
+      try {
+        const stored = await Promise.race([
+          new Promise((resolve) => {
+            chrome.storage.local.get(['ttk_seller_payload'], (res) => resolve(res || {}));
+          }),
+          sleep(300)
+        ]);
+        const sellerPayload = stored?.ttk_seller_payload;
+        const activeShop = sellerPayload?.active_shop || sellerPayload?.shops?.[0];
+        sellerId = activeShop?.formatted_seller_id || null;
+      } catch (e) {
+        sellerId = null;
+      }
     }
 
     const payload = {
@@ -1032,10 +1066,25 @@
         return { status: 'error', reason: 'Export button not found' };
       }
 
-      if (isExportButtonDisabled(currentBtn) || hasNoAvailableData()) {
-        logStep(`[${reportKey}] Export button is disabled / No data -> Skipped.`);
+      if (hasNoAvailableData()) {
+        logStep(`[${reportKey}] No available data yet -> Skipped.`);
         updateReportStatus(reportKey, 'empty', 'No data');
         return { status: 'empty' };
+      }
+
+      if (attempt > 1 && isExportButtonDisabled(currentBtn)) {
+        logStep(`[${reportKey}] Export button is busy generating file -> waiting up to 15s for download...`);
+        const busyDownloaded = await waitForDownloadSince(Date.now() - 5000, 15000);
+        if (busyDownloaded) {
+          logStep(`[${reportKey}] Download started while button was busy!`);
+          updateReportStatus(reportKey, 'done', 'Downloaded ✓');
+          await sleep(1000);
+          return { status: 'done', attempts: attempt };
+        }
+        if (hasNoAvailableData() || hasZeroTableRows()) {
+          updateReportStatus(reportKey, 'empty', 'No data');
+          return { status: 'empty' };
+        }
       }
 
       const clickTime = Date.now();
@@ -1056,16 +1105,22 @@
         return { status: 'done', attempts: attempt };
       }
 
-      if (attemptOutcome === 'empty' || hasNoAvailableData() || isExportButtonDisabled(currentBtn)) {
-        logStep(`[${reportKey}] No available data yet / Export disabled -> Skipped.`);
+      if (attemptOutcome === 'empty' || hasNoAvailableData()) {
+        logStep(`[${reportKey}] No available data yet -> Skipped.`);
         updateReportStatus(reportKey, 'empty', 'No data');
         return { status: 'empty' };
       }
 
-      if (attempt >= 2 && hasZeroTableRows()) {
+      if (attempt >= 3 && hasZeroTableRows()) {
         logStep(`[${reportKey}] Table has 0 data rows after ${attempt} attempts -> Skipped.`);
         updateReportStatus(reportKey, 'empty', 'No data');
         return { status: 'empty' };
+      }
+
+      if (attempt >= 5) {
+        logStep(`[${reportKey}] Max export attempts (${attempt}) reached -> Skipped.`, true);
+        updateReportStatus(reportKey, 'error', 'Export timeout');
+        return { status: 'error', reason: 'Export download timed out' };
       }
 
       logStep(
@@ -1076,7 +1131,7 @@
 
   // --- Main Page Workflow (LIVE Details or Video Details) ---
 
-  async function executeDetailsPageWorkflow(periodConfig) {
+  async function executeDetailsPageWorkflow(periodConfig, sellerId = null) {
     if (isWorkflowRunning) {
       return { ok: false, error: 'Workflow already running on this tab' };
     }
@@ -1089,6 +1144,8 @@
     }
 
     isWorkflowRunning = true;
+    activeWorkflowSellerId = sellerId || null;
+    startBackgroundRafHeartbeat();
     const linkedKey = `${pageType}_linked`;
     const affiliateKey = `${pageType}_affiliate`;
 
@@ -1145,6 +1202,7 @@
       return { ok: false, error: err.message || String(err) };
     } finally {
       isWorkflowRunning = false;
+      stopBackgroundRafHeartbeat();
     }
   }
 
@@ -1152,6 +1210,33 @@
 
   window.addEventListener('TIKTOK_EXPORT_TASK_CREATED', () => {
     lastExportTaskCreatedTimestamp = Date.now();
+  });
+
+  function forwardDirectDownloadUrl(rawUrl) {
+    if (!rawUrl || !isWorkflowRunning) return;
+    chrome.runtime.sendMessage(
+      {
+        action: 'FALLBACK_DIRECT_DOWNLOAD',
+        url: rawUrl,
+        timestamp: Date.now()
+      },
+      () => {
+        void chrome.runtime.lastError;
+      }
+    );
+  }
+
+  window.addEventListener('TIKTOK_EXPORT_DOWNLOAD_URL', (event) => {
+    lastExportTaskCreatedTimestamp = Date.now();
+    if (event.detail?.url) {
+      forwardDirectDownloadUrl(event.detail.url);
+    }
+  });
+
+  window.addEventListener('TIKTOK_WINDOW_OPEN_URL', (event) => {
+    if (event.detail?.url) {
+      forwardDirectDownloadUrl(event.detail.url);
+    }
   });
 
   window.addEventListener('TIKTOK_SELLER_CAPTURED', (event) => {
@@ -1186,19 +1271,23 @@
 
     if (request.action === 'RUN_PAGE_WORKFLOW') {
       logStep('[v3] RUN_PAGE_WORKFLOW message received by content script.');
-      executeDetailsPageWorkflow(request.periodConfig)
+      executeDetailsPageWorkflow(request.periodConfig, request.sellerId || null)
         .then((res) => sendResponse(res))
         .catch((err) => sendResponse({ ok: false, error: err?.message || String(err) }));
       return true;
     }
 
-    if (request.action === 'PING') {
-      sendResponse({ ok: true });
-      return true;
-    }
-
     return false;
   });
+
+  if (getPageReportType()) {
+    startBackgroundRafHeartbeat();
+    setTimeout(() => {
+      if (!isWorkflowRunning) {
+        stopBackgroundRafHeartbeat();
+      }
+    }, 15000);
+  }
 
   setTimeout(() => {
     window.dispatchEvent(new CustomEvent('TIKTOK_SELLER_REQUEST_STATE'));

@@ -161,11 +161,34 @@ def _accumulate_seller_folder(
             seller_acc[content_key]["impression"] += folder_totals[content_key]["impression"]
 
 
+def _scan_period_directory(
+    period_dir: Path,
+    mapping: dict[str, list[tuple[str, str]]],
+    grouped: dict[str, dict[tuple[str, str], dict[str, dict[str, float]]]],
+) -> None:
+    """Scan a single {date_or_month}/{seller_id}/*.xlsx directory (plus legacy flat files)."""
+    for seller_dir in sorted(sub for sub in period_dir.iterdir() if sub.is_dir()):
+        sub_xlsx = sorted(
+            f
+            for f in seller_dir.iterdir()
+            if f.is_file() and classify_report_filename(f.name) is not None
+        )
+        _accumulate_seller_folder(period_dir.name, seller_dir.name, sub_xlsx, mapping, grouped)
+
+    # Backward compatibility: legacy 2-level {seller_id}_{date}/*.xlsx
+    direct_xlsx = sorted(
+        f for f in period_dir.iterdir() if f.is_file() and classify_report_filename(f.name) is not None
+    )
+    if direct_xlsx:
+        raw_seller_id, date_str = parse_folder_name(period_dir.name)
+        _accumulate_seller_folder(date_str, raw_seller_id, direct_xlsx, mapping, grouped)
+
+
 def collect_metrics_by_date(
     reports_dir: Path,
     seller_mapping: dict[str, list[tuple[str, str]]] | None = None,
 ) -> dict[str, list[dict[str, object]]]:
-    """Scan data/raw_file/{date}/{seller_id}/*.xlsx (and legacy flat folders) grouped by date."""
+    """Scan data/raw_file/{Daily|Monthly}/{period}/{seller_id}/*.xlsx grouped by period."""
     if not reports_dir.exists():
         raise FileNotFoundError(f"Reports directory does not exist: {reports_dir}")
 
@@ -176,22 +199,14 @@ def collect_metrics_by_date(
         if not entry.is_dir():
             continue
 
-        # 3-level structure: data/raw_file/{date}/{seller_id}/*.xlsx
-        for seller_dir in sorted(sub for sub in entry.iterdir() if sub.is_dir()):
-            sub_xlsx = sorted(
-                f
-                for f in seller_dir.iterdir()
-                if f.is_file() and classify_report_filename(f.name) is not None
-            )
-            _accumulate_seller_folder(entry.name, seller_dir.name, sub_xlsx, mapping, grouped)
+        # 4-level structure: data/raw_file/{Daily|Monthly}/{period}/{seller_id}/*.xlsx
+        if entry.name.lower() in ("daily", "monthly"):
+            for period_dir in sorted(sub for sub in entry.iterdir() if sub.is_dir()):
+                _scan_period_directory(period_dir, mapping, grouped)
+            continue
 
-        # Backward compatibility: legacy 2-level {seller_id}_{date}/*.xlsx
-        direct_xlsx = sorted(
-            f for f in entry.iterdir() if f.is_file() and classify_report_filename(f.name) is not None
-        )
-        if direct_xlsx:
-            raw_seller_id, date_str = parse_folder_name(entry.name)
-            _accumulate_seller_folder(date_str, raw_seller_id, direct_xlsx, mapping, grouped)
+        # 3-level structure (or when --reports-dir points directly to Daily/ or Monthly/)
+        _scan_period_directory(entry, mapping, grouped)
 
     results_by_date: dict[str, list[dict[str, object]]] = {}
     for date_str in sorted(grouped.keys()):

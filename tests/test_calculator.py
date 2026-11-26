@@ -113,22 +113,29 @@ class CalculatorTests(unittest.TestCase):
         self.assertEqual(metrics["product_impression"], 500.0)
         self.assertEqual(metrics["impression"], 200.0)
 
-    def test_collect_metrics_by_date_handles_3level_hierarchy_and_missing_tabs(self) -> None:
+    def test_collect_metrics_by_date_handles_daily_monthly_and_missing_tabs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             reports_dir = Path(tmpdir)
-            seller_dir = reports_dir / "2026-11-18" / "PH.TTK.100"
+            daily_seller_dir = reports_dir / "Daily" / "2026-11-18" / "PH.TTK.100"
+            monthly_seller_dir = reports_dir / "Monthly" / "2026-10" / "PH.TTK.100"
 
-            # Only 4_Video_Affiliate exists (LIVE reports missing for this date/seller)
+            # Only 4_Video_Affiliate exists in Daily (LIVE reports missing for this date/seller)
             _write_report_fixture(
-                seller_dir / "4_Video_Affiliate.xlsx",
+                daily_seller_dir / "4_Video_Affiliate.xlsx",
                 headers=["C0", "VV", "C2", "Product Impressions", "Video-attributed GMV (₱)"],
                 data_rows=[["u1", "85", "a", "190", "12.34"]],
+            )
+            _write_report_fixture(
+                monthly_seller_dir / "1_LIVE_Linked.xlsx",
+                headers=["C0", "LIVE-attributed GMV (₱)", "Views", "C3", "Product Impressions"],
+                data_rows=[["u2", "50.00", "300", "b", "400"]],
             )
 
             mapping = {"PH.TTK.100": [("client_alpha", "client_alpha - PH.TTK.100")]}
             grouped = collect_metrics_by_date(reports_dir, mapping)
 
             self.assertIn("2026-11-18", grouped)
+            self.assertIn("2026-10", grouped)
             rows = grouped["2026-11-18"]
             self.assertEqual(len(rows), 2)
             self.assertEqual(rows[0]["client"], "client_alpha")
@@ -139,3 +146,8 @@ class CalculatorTests(unittest.TestCase):
             self.assertEqual(rows[1]["revenue"], 12.34)
             self.assertEqual(rows[1]["product_impression"], 190)
             self.assertEqual(rows[1]["impression"], 85)
+
+            monthly_rows = grouped["2026-10"]
+            self.assertEqual(monthly_rows[0]["revenue"], 50.0)
+            self.assertEqual(monthly_rows[0]["product_impression"], 400)
+            self.assertEqual(monthly_rows[0]["impression"], 300)

@@ -254,7 +254,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadWorkflowState();
 
   // Verify background service worker is up-to-date and downloads.onDeterminingFilename is active
-  const EXPECTED_BG_VERSION = '2.2.4';
+  const EXPECTED_BG_VERSION = '2.2.6';
   chrome.runtime.sendMessage({ action: 'CHECK_BACKGROUND_READY' }, (res) => {
     if (chrome.runtime.lastError || !res || !res.ok) {
       renderWorkflowLog({
@@ -450,11 +450,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const activeTab = tabs[0];
+      const currentSellerId = formattedSellerId?.textContent?.trim() || null;
       chrome.runtime.sendMessage(
         {
           action: 'START_FULL_WORKFLOW',
           scope,
           tabId: activeTab?.id || null,
+          sellerId: currentSellerId && !currentSellerId.includes('--') ? currentSellerId : null,
           reportUrls: currentReportUrls,
           periodConfig
         },

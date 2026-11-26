@@ -1,4 +1,4 @@
-const BG_VERSION = '2.2.4';
+const BG_VERSION = '2.2.6';
 
 const REPORT_PREFIX_MAP = {
   live_linked: '1_LIVE_Linked',
@@ -414,14 +414,16 @@ function getSellerAndPeriodFolder() {
 
   const recentExpected = isRecentExpectedDownload();
   const periodCfg = (recentExpected ? cachedExpectedDownload?.periodConfig : null) || cachedPeriodConfig;
+  const isMonthMode = periodCfg?.mode === 'month';
+  const modeFolder = isMonthMode ? 'Monthly' : 'Daily';
   const rawPeriod = periodCfg
-    ? periodCfg.mode === 'month'
+    ? isMonthMode
       ? periodCfg.month
       : periodCfg.date
     : '';
   const periodLabel = sanitizeFilenamePart(rawPeriod, getTodayLocalDateStr());
 
-  return { sellerId, periodLabel, recentExpected };
+  return { sellerId, modeFolder, periodLabel, recentExpected };
 }
 
 function resolveDownloadSuggestion(downloadItem, suggest) {
@@ -435,13 +437,13 @@ function resolveDownloadSuggestion(downloadItem, suggest) {
   const ext = dotIdx > 0 ? rawBasename.slice(dotIdx) : '.xlsx';
   const rawStem = dotIdx > 0 ? rawBasename.slice(0, dotIdx) : rawBasename;
 
-  const { sellerId, periodLabel, recentExpected } = getSellerAndPeriodFolder();
+  const { sellerId, modeFolder, periodLabel, recentExpected } = getSellerAndPeriodFolder();
 
   const reportKey = recentExpected ? cachedExpectedDownload?.reportKey : null;
   const reportPrefix =
     (reportKey && REPORT_PREFIX_MAP[reportKey]) || sanitizeFilenamePart(rawStem, 'report');
 
-  const relativePath = `CE-Reports/${periodLabel}/${sellerId}/${reportPrefix}${ext}`;
+  const relativePath = `CE-Reports/${modeFolder}/${periodLabel}/${sellerId}/${reportPrefix}${ext}`;
   suggest({ filename: relativePath, conflictAction: 'overwrite' });
 }
 
@@ -453,10 +455,20 @@ if (chrome.downloads && chrome.downloads.onDeterminingFilename) {
   });
 }
 
+let lastChromeDownloadCreatedAt = 0;
+const recentTriggeredDownloadUrls = new Set();
+
 // Notify active Seller Center tabs whenever Chrome starts a download (used for smart Export retry)
 if (chrome.downloads && chrome.downloads.onCreated) {
   chrome.downloads.onCreated.addListener((downloadItem) => {
     const now = Date.now();
+    lastChromeDownloadCreatedAt = now;
+    if (downloadItem.url) {
+      recentTriggeredDownloadUrls.add(downloadItem.url);
+    }
+    if (downloadItem.finalUrl) {
+      recentTriggeredDownloadUrls.add(downloadItem.finalUrl);
+    }
     chrome.tabs.query(
       {
         url: [
@@ -579,7 +591,7 @@ async function sendMessageWithAutoInject(tabId, payload) {
   });
 }
 
-async function waitAndRunPageWorkflow(tabId, periodConfig) {
+async function waitAndRunPageWorkflow(tabId, periodConfig, sellerId = null) {
   await sleep(1500);
   await waitForTabComplete(tabId, 25000);
   // Give React + Arco time to render #page-title-datepicker and table
@@ -587,13 +599,14 @@ async function waitAndRunPageWorkflow(tabId, periodConfig) {
 
   return sendMessageWithAutoInject(tabId, {
     action: 'RUN_PAGE_WORKFLOW',
-    periodConfig
+    periodConfig,
+    sellerId
   });
 }
 
-async function navigateAndRunPageWorkflow(tabId, targetUrl, periodConfig) {
+async function navigateAndRunPageWorkflow(tabId, targetUrl, periodConfig, sellerId = null) {
   await chrome.tabs.update(tabId, { url: targetUrl });
-  return waitAndRunPageWorkflow(tabId, periodConfig);
+  return waitAndRunPageWorkflow(tabId, periodConfig, sellerId);
 }
 
 const EXPORT_SCOPE_LABELS = {
@@ -602,10 +615,19 @@ const EXPORT_SCOPE_LABELS = {
   video: 'Video Reports'
 };
 
-async function runBackgroundExportWorkflow(sourceTabId, reportUrls, periodConfig, scope = 'all') {
+async function runBackgroundExportWorkflow(
+  sourceTabId,
+  reportUrls,
+  periodConfig,
+  scope = 'all',
+  explicitSellerId = null
+) {
   const normalizedScope = scope === 'live' || scope === 'video' ? scope : 'all';
 
   await hydrateCaches();
+  const activeShop = cachedSellerPayload?.active_shop || cachedSellerPayload?.shops?.[0];
+  const lockedSellerId = explicitSellerId || activeShop?.formatted_seller_id || null;
+
   await chrome.storage.local.remove(['ttk_workflow_log']);
   await chrome.storage.local.set({ ttk_workflow_running: normalizedScope });
 
@@ -645,27 +667,32 @@ async function runBackgroundExportWorkflow(sourceTabId, reportUrls, periodConfig
 
     if (normalizedScope === 'live') {
       saveWorkflowLog('⏳ Exporting LIVE Reports in background tab...', 'info');
-      liveRes = await waitAndRunPageWorkflow(workerTabId, periodConfig);
+      liveRes = await waitAndRunPageWorkflow(workerTabId, periodConfig, lockedSellerId);
       if (liveRes && !liveRes.ok) {
         throw new Error(liveRes.error || 'LIVE export failed');
       }
-      await sleep(2000);
+      await sleep(2500);
     } else if (normalizedScope === 'video') {
       saveWorkflowLog('⏳ Exporting Video Reports in background tab...', 'info');
-      videoRes = await waitAndRunPageWorkflow(workerTabId, periodConfig);
+      videoRes = await waitAndRunPageWorkflow(workerTabId, periodConfig, lockedSellerId);
       if (videoRes && !videoRes.ok) {
         throw new Error(videoRes.error || 'Video export failed');
       }
       await sleep(3000);
     } else {
       saveWorkflowLog('⏳ Exporting LIVE Reports in background tab...', 'info');
-      liveRes = await waitAndRunPageWorkflow(workerTabId, periodConfig);
+      liveRes = await waitAndRunPageWorkflow(workerTabId, periodConfig, lockedSellerId);
       if (liveRes && !liveRes.ok) {
         throw new Error(liveRes.error || 'LIVE export failed');
       }
-      await sleep(1200);
+      await sleep(1500);
       saveWorkflowLog('⏳ Exporting Video Reports in background tab...', 'info');
-      videoRes = await navigateAndRunPageWorkflow(workerTabId, reportUrls.video_details, periodConfig);
+      videoRes = await navigateAndRunPageWorkflow(
+        workerTabId,
+        reportUrls.video_details,
+        periodConfig,
+        lockedSellerId
+      );
       if (videoRes && !videoRes.ok) {
         throw new Error(videoRes.error || 'Video export failed');
       }
@@ -777,9 +804,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === 'START_EXPORT_WORKFLOW' || message.action === 'START_FULL_WORKFLOW') {
-    const { tabId, reportUrls, periodConfig, scope } = message;
-    runBackgroundExportWorkflow(tabId, reportUrls, periodConfig, scope || 'all');
+    const { tabId, reportUrls, periodConfig, scope, sellerId } = message;
+    runBackgroundExportWorkflow(tabId, reportUrls, periodConfig, scope || 'all', sellerId || null);
     sendResponse({ ok: true, started: true, version: BG_VERSION });
+    return false;
+  }
+
+  if (message.action === 'FALLBACK_DIRECT_DOWNLOAD') {
+    const targetUrl = String(message.url || '').trim();
+    if (!targetUrl || !/^https?:\/\//i.test(targetUrl)) {
+      sendResponse({ ok: false });
+      return false;
+    }
+    setTimeout(() => {
+      const recentlyStarted =
+        recentTriggeredDownloadUrls.has(targetUrl) ||
+        Date.now() - lastChromeDownloadCreatedAt < 900;
+      if (!recentlyStarted && chrome.downloads && chrome.downloads.download) {
+        recentTriggeredDownloadUrls.add(targetUrl);
+        chrome.downloads.download({ url: targetUrl, saveAs: false }, () => {
+          void chrome.runtime.lastError;
+        });
+      }
+    }, 550);
+    sendResponse({ ok: true });
     return false;
   }
 

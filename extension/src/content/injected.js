@@ -14,6 +14,54 @@
     return;
   }
 
+  // 0. Keep page visibility & focus state always active so switching to other Chrome tabs/apps
+  // never pauses TikTok Seller Center's React rendering, table queries, or export task polling.
+  try {
+    Object.defineProperty(Document.prototype, 'hidden', {
+      get: () => false,
+      configurable: true
+    });
+    Object.defineProperty(Document.prototype, 'visibilityState', {
+      get: () => 'visible',
+      configurable: true
+    });
+    Object.defineProperty(Document.prototype, 'webkitHidden', {
+      get: () => false,
+      configurable: true
+    });
+    Object.defineProperty(Document.prototype, 'webkitVisibilityState', {
+      get: () => 'visible',
+      configurable: true
+    });
+    Document.prototype.hasFocus = function () {
+      return true;
+    };
+
+    const BLOCKED_VISIBILITY_EVENTS = new Set([
+      'visibilitychange',
+      'webkitvisibilitychange',
+      'pagehide',
+      'freeze'
+    ]);
+    const origDocAddEvent = Document.prototype.addEventListener;
+    Document.prototype.addEventListener = function (type, listener, options) {
+      if (BLOCKED_VISIBILITY_EVENTS.has(String(type || '').toLowerCase())) {
+        return;
+      }
+      return origDocAddEvent.call(this, type, listener, options);
+    };
+
+    const origWinAddEvent = Window.prototype.addEventListener;
+    Window.prototype.addEventListener = function (type, listener, options) {
+      if (BLOCKED_VISIBILITY_EVENTS.has(String(type || '').toLowerCase())) {
+        return;
+      }
+      return origWinAddEvent.call(this, type, listener, options);
+    };
+  } catch (err) {
+    console.debug('[TikTok Extension] Visibility override warning:', err);
+  }
+
   // Ensure requestAnimationFrame continues firing when the worker tab runs in the background (document.hidden === true).
   // Arco Design's Trigger / DatePicker relies on requestAnimationFrame to mount and position calendar popups.
   const origRAF = window.requestAnimationFrame.bind(window);
@@ -78,8 +126,79 @@
   });
 
   const TARGET_ENDPOINT = '/api/v1/seller/workbench/get_all_sellers';
-  const EXPORT_ENDPOINT_HINTS = ['/live/list/export', '/video/analytics/video/list/export'];
+  const EXPORT_ENDPOINT_HINTS = [
+    '/live/list/export',
+    '/video/analytics/video/list/export',
+    '/compass/api',
+    '/export'
+  ];
   let lastCapturedPayload = null;
+
+  function extractExportDownloadUrl(jsonData) {
+    if (!jsonData || typeof jsonData !== 'object') return null;
+    const data = jsonData.data || jsonData;
+    if (!data || typeof data !== 'object') return null;
+    const candidates = [
+      data.download_url,
+      data.downloadUrl,
+      data.file_url,
+      data.fileUrl,
+      data.url,
+      typeof data.file === 'string' && /^https?:\/\//i.test(data.file) ? data.file : null
+    ];
+    return candidates.find((u) => typeof u === 'string' && /^https?:\/\//i.test(u)) || null;
+  }
+
+  function inspectPossibleExportResponse(jsonData, url) {
+    if (!jsonData || typeof jsonData !== 'object') return;
+    const lowerUrl = String(url || '').toLowerCase();
+    const isExportUrl =
+      lowerUrl.includes('/live/list/export') ||
+      lowerUrl.includes('/video/analytics/video/list/export') ||
+      lowerUrl.includes('export');
+    if (!isExportUrl) return;
+
+    const taskId =
+      jsonData?.data?.file ||
+      jsonData?.data?.task_id ||
+      jsonData?.data?.taskId ||
+      jsonData?.data?.export_task_id ||
+      (jsonData?.code === 0 && lowerUrl.includes('/list/export') ? 'export_ok' : null);
+
+    if (taskId) {
+      window.dispatchEvent(
+        new CustomEvent('TIKTOK_EXPORT_TASK_CREATED', {
+          detail: { taskId, url, timestamp: Date.now() }
+        })
+      );
+    }
+
+    const directUrl = extractExportDownloadUrl(jsonData);
+    if (directUrl) {
+      window.dispatchEvent(
+        new CustomEvent('TIKTOK_EXPORT_DOWNLOAD_URL', {
+          detail: { url: directUrl, sourceUrl: url, timestamp: Date.now() }
+        })
+      );
+    }
+  }
+
+  // Intercept window.open so background tabs (where Chrome blocks popups without user gesture)
+  // still trigger file downloads seamlessly.
+  if (typeof window.open === 'function') {
+    const origWindowOpen = window.open;
+    window.open = function (url, target, features) {
+      const urlStr = typeof url === 'string' ? url : url ? String(url) : '';
+      if (urlStr && /^https?:\/\//i.test(urlStr)) {
+        window.dispatchEvent(
+          new CustomEvent('TIKTOK_WINDOW_OPEN_URL', {
+            detail: { url: urlStr, timestamp: Date.now() }
+          })
+        );
+      }
+      return origWindowOpen.call(this, url, target, features);
+    };
+  }
 
   function parseSellerData(data, requestUrl) {
     if (!data || typeof data !== 'object') return null;
@@ -166,14 +285,7 @@
         } else if (url && EXPORT_ENDPOINT_HINTS.some(hint => url.includes(hint))) {
           const clone = response.clone();
           clone.json().then(jsonData => {
-            const taskId = jsonData?.data?.file;
-            if (taskId) {
-              window.dispatchEvent(
-                new CustomEvent('TIKTOK_EXPORT_TASK_CREATED', {
-                  detail: { taskId, url, timestamp: Date.now() }
-                })
-              );
-            }
+            inspectPossibleExportResponse(jsonData, url);
           }).catch(() => {});
         }
       } catch (err) {
@@ -200,6 +312,12 @@
             const jsonData = JSON.parse(this.responseText);
             const payload = parseSellerData(jsonData, this.__reqUrl);
             if (payload) dispatchSellerData(payload);
+          } else if (
+            this.__reqUrl &&
+            EXPORT_ENDPOINT_HINTS.some((hint) => this.__reqUrl.includes(hint))
+          ) {
+            const jsonData = JSON.parse(this.responseText);
+            inspectPossibleExportResponse(jsonData, this.__reqUrl);
           }
         } catch (e) {
           // not JSON or not target response

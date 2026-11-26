@@ -8,6 +8,12 @@ set "REPORTS_DIR=%REPO_DIR%\data\raw_file"
 if not exist "%REPORTS_DIR%" (
     mkdir "%REPORTS_DIR%"
 )
+if not exist "%REPORTS_DIR%\Daily" (
+    mkdir "%REPORTS_DIR%\Daily"
+)
+if not exist "%REPORTS_DIR%\Monthly" (
+    mkdir "%REPORTS_DIR%\Monthly"
+)
 
 for /f "usebackq delims=" %%D in (`powershell -NoProfile -Command "(New-Object -ComObject Shell.Application).NameSpace('shell:Downloads').Self.Path" 2^>nul`) do (
     set "DOWNLOADS_DIR=%%D"

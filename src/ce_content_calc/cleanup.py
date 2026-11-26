@@ -1,4 +1,4 @@
-"""Date-range directory cleanup utilities for data/raw_file/{YYYY-MM-DD}/."""
+"""Date-range directory cleanup utilities for data/raw_file/Daily/{YYYY-MM-DD}/."""
 
 from __future__ import annotations
 
@@ -59,16 +59,28 @@ def delete_reports_in_range(
         print(f"Reports directory not found: {reports_dir}")
         return 0, 0, 0
 
+    search_roots: list[Path] = []
+    daily_subdir = reports_dir / "Daily"
+    if daily_subdir.is_dir():
+        search_roots.append(daily_subdir)
+    search_roots.append(reports_dir)
+
     matched_folders: list[tuple[datetime.date, Path]] = []
-    for entry in sorted(reports_dir.iterdir()):
-        if not entry.is_dir() or not _ISO_DATE_RE.fullmatch(entry.name):
-            continue
-        try:
-            folder_date = datetime.date.fromisoformat(entry.name)
-        except ValueError:
-            continue
-        if start_date <= folder_date <= end_date:
-            matched_folders.append((folder_date, entry))
+    seen_paths: set[Path] = set()
+    for root in search_roots:
+        for entry in sorted(root.iterdir()):
+            if not entry.is_dir() or not _ISO_DATE_RE.fullmatch(entry.name):
+                continue
+            resolved = entry.resolve()
+            if resolved in seen_paths:
+                continue
+            try:
+                folder_date = datetime.date.fromisoformat(entry.name)
+            except ValueError:
+                continue
+            if start_date <= folder_date <= end_date:
+                seen_paths.add(resolved)
+                matched_folders.append((folder_date, entry))
 
     if not matched_folders:
         print(f"No date folders found between {start_date} and {end_date} in {reports_dir}")
