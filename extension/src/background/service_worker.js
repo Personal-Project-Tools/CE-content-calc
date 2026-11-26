@@ -1,10 +1,4 @@
-/**
- * Background Service Worker (Manifest V3)
- * Manages seller state, monitors Chrome report downloads, routes TikTok reports to CE-Reports/,
- * and orchestrates the 4-report workflow across LIVE -> Details and Video -> Details pages.
- */
-
-const BG_VERSION = '2.1.0';
+const BG_VERSION = '2.2.1';
 
 const REPORT_PREFIX_MAP = {
   live_linked: '1_LIVE_Linked',
@@ -16,6 +10,7 @@ const REPORT_PREFIX_MAP = {
 const EXPECTED_DOWNLOAD_TTL_MS = 60000;
 const TIKTOK_DOMAIN_KEYWORDS = [
   'tiktok',
+  'tokopedia',
   'oecstatic',
   'byted',
   'byteintl',
@@ -28,18 +23,305 @@ const TIKTOK_FILENAME_PATTERNS = ['live analysis', 'video performance'];
 let cachedSellerPayload = null;
 let cachedPeriodConfig = null;
 let cachedExpectedDownload = null;
+let cachedSheetClientMap = null;
+let cachedSheetMapUpdatedAt = 0;
+let cachedGoogleAccessToken = null;
+let cachedGoogleTokenExpiresAt = 0;
+let inflightSheetMapPromise = null;
 let cacheHydrated = false;
 let hydratePromise = null;
+
+const SHEET_CACHE_TTL_MS = 10 * 60 * 1000;
+const GOOGLE_SHEETS_READONLY_SCOPE = 'https://www.googleapis.com/auth/spreadsheets.readonly';
+const GOOGLE_TOKEN_URI = 'https://oauth2.googleapis.com/token';
+const utf8Encoder = new TextEncoder();
+
+function bytesToBase64Url(bytes) {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function encodeUtf8Base64Url(text) {
+  return bytesToBase64Url(utf8Encoder.encode(text));
+}
+
+function stripYamlScalar(rawVal) {
+  const withoutComment = String(rawVal || '').split('#')[0].trim();
+  if (
+    (withoutComment.startsWith('"') && withoutComment.endsWith('"')) ||
+    (withoutComment.startsWith("'") && withoutComment.endsWith("'"))
+  ) {
+    return withoutComment.slice(1, -1).trim();
+  }
+  return withoutComment;
+}
+
+function normalizeA1RangeJs(rawRange) {
+  const cleaned = stripYamlScalar(rawRange);
+  const shorthand = cleaned.match(/column\[\s*([A-Za-z]+)\s*\]\s*-\s*row\[\s*(\d+)\s*\]/i);
+  if (shorthand) {
+    const col = shorthand[1].toUpperCase();
+    return `${col}${shorthand[2]}:${col}`;
+  }
+  return cleaned;
+}
+
+function parseSheetYamlText(yamlText) {
+  const kv = {};
+  for (const line of String(yamlText || '').split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const colonIdx = trimmed.indexOf(':');
+    if (colonIdx <= 0) continue;
+    const key = trimmed.slice(0, colonIdx).trim();
+    const val = stripYamlScalar(trimmed.slice(colonIdx + 1));
+    if (val !== '') {
+      kv[key] = val;
+    }
+  }
+
+  const spreadsheetId = kv.spreadsheet_id || kv.root_spreadsheet || '';
+  const worksheet = kv.worksheet || kv.tab_sheet || 'seller_scope';
+  const sellerFullMatchRange = normalizeA1RangeJs(kv.seller_full_match || 'AV4:AV');
+  const sellerUsedIdRange = normalizeA1RangeJs(kv.seller_used_id || kv.seller_id_range || 'AW4:AW');
+  const activeStatusRange = kv.active_status
+    ? normalizeA1RangeJs(kv.active_status)
+    : '';
+  const credentialsFile = (kv.credentials_file || 'config/service.json').replace(/^\.?\//, '');
+  const platform = (kv.platform || kv.platform_filter || 'TTK').toUpperCase();
+  const activeOnly = kv.active_only
+    ? ['true', '1', 'yes'].includes(kv.active_only.toLowerCase())
+    : Boolean(activeStatusRange);
+
+  if (!spreadsheetId || spreadsheetId.startsWith('<')) {
+    throw new Error('Missing valid spreadsheet_id in config/sheet.yaml');
+  }
+
+  return {
+    credentialsFile,
+    spreadsheetId,
+    worksheet,
+    sellerFullMatchRange,
+    sellerUsedIdRange,
+    activeStatusRange,
+    platform,
+    activeOnly
+  };
+}
+
+async function importServiceAccountPrivateKey(pem) {
+  const b64 = String(pem || '').replace(
+    /-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----|\s+/g,
+    ''
+  );
+  const bin = atob(b64);
+  const der = Uint8Array.from(bin, (ch) => ch.charCodeAt(0));
+  return crypto.subtle.importKey(
+    'pkcs8',
+    der.buffer,
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+}
+
+async function getGoogleSheetsAccessToken(serviceAccount) {
+  const nowMs = Date.now();
+  if (cachedGoogleAccessToken && nowMs < cachedGoogleTokenExpiresAt - 60_000) {
+    return cachedGoogleAccessToken;
+  }
+
+  const nowSec = Math.floor(nowMs / 1000);
+  const tokenUri = serviceAccount.token_uri || GOOGLE_TOKEN_URI;
+  const headerB64 = encodeUtf8Base64Url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const claimsB64 = encodeUtf8Base64Url(
+    JSON.stringify({
+      iss: serviceAccount.client_email,
+      scope: GOOGLE_SHEETS_READONLY_SCOPE,
+      aud: tokenUri,
+      iat: nowSec,
+      exp: nowSec + 3600
+    })
+  );
+
+  const signingInput = `${headerB64}.${claimsB64}`;
+  const cryptoKey = await importServiceAccountPrivateKey(serviceAccount.private_key);
+  const sigBuffer = await crypto.subtle.sign(
+    'RSASSA-PKCS1-v1_5',
+    cryptoKey,
+    utf8Encoder.encode(signingInput)
+  );
+  const jwt = `${signingInput}.${bytesToBase64Url(new Uint8Array(sigBuffer))}`;
+
+  const tokenRes = await fetch(tokenUri, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion: jwt
+    }),
+    signal: AbortSignal.timeout(10_000)
+  });
+
+  if (!tokenRes.ok) {
+    throw new Error(`OAuth token HTTP ${tokenRes.status}`);
+  }
+
+  const tokenData = await tokenRes.json();
+  cachedGoogleAccessToken = tokenData.access_token;
+  cachedGoogleTokenExpiresAt = nowMs + (Number(tokenData.expires_in) || 3600) * 1000;
+  return cachedGoogleAccessToken;
+}
+
+async function fetchSheetClientMappingFromGoogle() {
+  const sheetYamlUrl = chrome.runtime.getURL('config/sheet.yaml');
+  const yamlRes = await fetch(sheetYamlUrl, { cache: 'no-store' });
+  if (!yamlRes.ok) {
+    throw new Error('Could not read extension/config/sheet.yaml (run setup-reports-junction.bat)');
+  }
+  const cfg = parseSheetYamlText(await yamlRes.text());
+
+  const credsRelPath = cfg.credentialsFile.startsWith('config/')
+    ? cfg.credentialsFile
+    : `config/${cfg.credentialsFile}`;
+  const credsRes = await fetch(chrome.runtime.getURL(credsRelPath), { cache: 'no-store' });
+  if (!credsRes.ok) {
+    throw new Error(`Could not read ${credsRelPath}`);
+  }
+  const serviceAccount = await credsRes.json();
+  const accessToken = await getGoogleSheetsAccessToken(serviceAccount);
+
+  const safeSheet = cfg.worksheet.replace(/'/g, "''");
+  const batchUrl = new URL(
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(cfg.spreadsheetId)}/values:batchGet`
+  );
+  batchUrl.searchParams.append('ranges', `'${safeSheet}'!${cfg.sellerFullMatchRange}`);
+  batchUrl.searchParams.append('ranges', `'${safeSheet}'!${cfg.sellerUsedIdRange}`);
+  if (cfg.activeStatusRange) {
+    batchUrl.searchParams.append('ranges', `'${safeSheet}'!${cfg.activeStatusRange}`);
+  }
+
+  const sheetRes = await fetch(batchUrl, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(12_000)
+  });
+  if (!sheetRes.ok) {
+    throw new Error(`Google Sheets HTTP ${sheetRes.status}`);
+  }
+
+  const sheetJson = await sheetRes.json();
+  const valueRanges = sheetJson.valueRanges || [];
+  const fullRows = valueRanges[0]?.values || [];
+  const idRows = valueRanges[1]?.values || [];
+  const statusRows = valueRanges[2]?.values || [];
+
+  const totalRows = Math.max(fullRows.length, idRows.length, statusRows.length);
+  const platformToken = cfg.platform ? `.${cfg.platform}.` : '';
+  const buckets = new Map();
+
+  for (let i = 0; i < totalRows; i++) {
+    const fullVal = String(fullRows[i]?.[0] || '').trim();
+    const idVal = String(idRows[i]?.[0] || '').trim();
+    if (!fullVal && !idVal) continue;
+
+    if (cfg.activeStatusRange && cfg.activeOnly) {
+      const statusVal = String(statusRows[i]?.[0] || '').trim().toUpperCase();
+      if (statusVal !== 'TRUE') continue;
+    }
+
+    const candidateUpper = `${idVal} ${fullVal}`.toUpperCase();
+    if (platformToken && !candidateUpper.includes(platformToken)) continue;
+    if (idVal.toUpperCase().endsWith('.TBD') || fullVal.toUpperCase().endsWith('.TBD')) continue;
+
+    const clientName = fullVal.includes(' - ')
+      ? fullVal.split(' - ', 1)[0].trim()
+      : '';
+    if (!clientName) continue;
+
+    const codeKey = (idVal || fullVal.split(' - ').pop() || '').trim().toUpperCase();
+    if (!codeKey) continue;
+
+    let list = buckets.get(codeKey);
+    if (!list) {
+      list = [];
+      buckets.set(codeKey, list);
+    }
+    if (!list.includes(clientName)) {
+      list.push(clientName);
+    }
+  }
+
+  const clientMap = {};
+  for (const [codeKey, clients] of buckets.entries()) {
+    clientMap[codeKey] = clients.join(', ');
+  }
+
+  cachedSheetClientMap = clientMap;
+  cachedSheetMapUpdatedAt = Date.now();
+  chrome.storage.local.set({
+    ttk_sheet_client_cache: {
+      map: clientMap,
+      updatedAt: cachedSheetMapUpdatedAt
+    }
+  });
+  return clientMap;
+}
+
+async function getSheetClientMap(forceRefresh = false) {
+  await hydrateCaches();
+  const isFresh =
+    cachedSheetClientMap && Date.now() - cachedSheetMapUpdatedAt < SHEET_CACHE_TTL_MS;
+  if (!forceRefresh && isFresh) {
+    return cachedSheetClientMap;
+  }
+  if (!inflightSheetMapPromise) {
+    inflightSheetMapPromise = fetchSheetClientMappingFromGoogle().finally(() => {
+      inflightSheetMapPromise = null;
+    });
+  }
+  return inflightSheetMapPromise;
+}
+
+async function resolveClientForSellerId(sellerId, forceRefresh = false) {
+  const key = String(sellerId || '').trim().toUpperCase();
+  if (!key) {
+    return { ok: true, client: 'Unmapped', unmapped: true };
+  }
+  try {
+    const clientMap = await getSheetClientMap(forceRefresh);
+    const matchedClient = clientMap?.[key];
+    if (matchedClient) {
+      return { ok: true, client: matchedClient, unmapped: false };
+    }
+    return { ok: true, client: 'Unmapped', unmapped: true };
+  } catch (err) {
+    console.warn('[TikTok Extension] Client lookup failed:', new Error('Sheet lookup error', { cause: err }));
+    return { ok: false, client: 'Unmapped', unmapped: true, error: err.message || String(err) };
+  }
+}
 
 function hydrateCaches() {
   if (hydratePromise) return hydratePromise;
   hydratePromise = new Promise((resolve) => {
     chrome.storage.local.get(
-      ['ttk_seller_payload', 'ttk_period_config', 'ttk_expected_download'],
+      [
+        'ttk_seller_payload',
+        'ttk_period_config',
+        'ttk_expected_download',
+        'ttk_sheet_client_cache'
+      ],
       (res) => {
         if (res.ttk_seller_payload) cachedSellerPayload = res.ttk_seller_payload;
         if (res.ttk_period_config) cachedPeriodConfig = res.ttk_period_config;
         if (res.ttk_expected_download) cachedExpectedDownload = res.ttk_expected_download;
+        if (res.ttk_sheet_client_cache?.map) {
+          cachedSheetClientMap = res.ttk_sheet_client_cache.map;
+          cachedSheetMapUpdatedAt = res.ttk_sheet_client_cache.updatedAt || 0;
+        }
         cacheHydrated = true;
         resolve();
       }
@@ -164,7 +446,15 @@ if (chrome.downloads && chrome.downloads.onDeterminingFilename) {
 if (chrome.downloads && chrome.downloads.onCreated) {
   chrome.downloads.onCreated.addListener((downloadItem) => {
     const now = Date.now();
-    chrome.tabs.query({ url: ['https://*.tiktok.com/*', 'https://*.tiktokglobalshop.com/*'] }, (tabs) => {
+    chrome.tabs.query(
+      {
+        url: [
+          'https://*.tiktok.com/*',
+          'https://*.tiktokglobalshop.com/*',
+          'https://*.tokopedia.com/*'
+        ]
+      },
+      (tabs) => {
       for (const tab of tabs) {
         if (tab.id) {
           chrome.tabs.sendMessage(
@@ -397,6 +687,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
+    const activeShop = payload.active_shop || payload.shops[0];
+    if (activeShop?.formatted_seller_id && cachedSheetClientMap) {
+      const matched = cachedSheetClientMap[activeShop.formatted_seller_id.toUpperCase()];
+      if (matched) {
+        activeShop.resolved_client = matched;
+      }
+    }
+
     cachedSellerPayload = payload;
     chrome.storage.local.set(
       {
@@ -404,13 +702,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         ttk_last_updated: Date.now()
       },
       () => {
-        const activeShop = payload.active_shop || payload.shops[0];
         const badgeText = activeShop?.country || `${payload.shops.length}`;
         chrome.action.setBadgeText({ text: badgeText });
         chrome.action.setBadgeBackgroundColor({ color: '#fe2c55' });
         sendResponse({ success: true, saved: payload.shops.length });
       }
     );
+    return true;
+  }
+
+  if (message.action === 'RESOLVE_SELLER_CLIENT') {
+    resolveClientForSellerId(message.sellerId, Boolean(message.forceRefresh)).then((res) => {
+      sendResponse(res);
+    });
     return true;
   }
 

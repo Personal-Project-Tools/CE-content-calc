@@ -12,8 +12,13 @@
   }
   window.__TTK_CONTENT_SCRIPT_LOADED__ = true;
 
-  // Only run on seller subdomains
-  if (!window.location.hostname.includes('seller') && !window.location.hostname.includes('tiktokglobalshop')) {
+  // Run on TikTok & Tokopedia Seller Center domains (including id.tokopedia.com / seller-id.tokopedia.com)
+  const host = window.location.hostname.toLowerCase();
+  if (
+    !host.includes('seller') &&
+    !host.includes('tiktokglobalshop') &&
+    !host.includes('id.tokopedia.com')
+  ) {
     return;
   }
 

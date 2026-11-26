@@ -101,8 +101,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const emptyState = document.getElementById('empty-state');
   const sellerSection = document.getElementById('seller-section');
 
-  const shopCountry = document.getElementById('shop-country');
-  const shopName = document.getElementById('shop-name');
+  const shopClient = document.getElementById('shop-client');
   const formattedSellerId = document.getElementById('formatted-seller-id');
   const regionParamBadge = document.getElementById('region-param-badge');
 
@@ -255,7 +254,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadWorkflowState();
 
   // Verify background service worker is up-to-date and downloads.onDeterminingFilename is active
-  const EXPECTED_BG_VERSION = '2.1.0';
+  const EXPECTED_BG_VERSION = '2.2.1';
   chrome.runtime.sendMessage({ action: 'CHECK_BACKGROUND_READY' }, (res) => {
     if (chrome.runtime.lastError || !res || !res.ok) {
       renderWorkflowLog({
@@ -286,11 +285,28 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  function isSupportedSellerUrl(rawUrl) {
+    if (!rawUrl) return false;
+    try {
+      const host = new URL(rawUrl).hostname.toLowerCase();
+      return (
+        (host.includes('seller') && (host.includes('tiktok.com') || host.includes('tokopedia.com'))) ||
+        host.includes('tiktokglobalshop.com') ||
+        host.includes('id.tokopedia.com')
+      );
+    } catch {
+      return false;
+    }
+  }
+
   function buildFallbackReportUrls(country, tabUrl) {
     const region = (country || 'SG').toUpperCase();
-    let origin = `https://seller-${region.toLowerCase()}.tiktok.com`;
+    let origin =
+      region === 'ID'
+        ? 'https://seller-id.tokopedia.com'
+        : `https://seller-${region.toLowerCase()}.tiktok.com`;
     try {
-      if (tabUrl && tabUrl.includes('tiktok')) {
+      if (tabUrl && (tabUrl.includes('tiktok') || tabUrl.includes('tokopedia'))) {
         origin = new URL(tabUrl).origin;
       }
     } catch {
@@ -309,10 +325,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Check active tab domain
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     const activeTab = tabs[0];
-    const isTikTokTab =
-      activeTab?.url &&
-      ((activeTab.url.includes('seller') && activeTab.url.includes('tiktok.com')) ||
-        activeTab.url.includes('tiktokglobalshop.com'));
+    const isTikTokTab = isSupportedSellerUrl(activeTab?.url);
 
     if (isTikTokTab) {
       statusBadge.className = 'status-badge status-connected';
@@ -331,26 +344,60 @@ document.addEventListener('DOMContentLoaded', () => {
     loadStoredData();
   });
 
-  function loadStoredData() {
+  function loadStoredData(forceRefreshClient = false) {
     chrome.storage.local.get(['ttk_seller_payload'], (result) => {
       const payload = result.ttk_seller_payload;
       if (payload && payload.shops && payload.shops.length > 0) {
-        renderShopData(payload);
+        renderShopData(payload, forceRefreshClient);
       } else {
         showEmptyState();
       }
     });
   }
 
-  function renderShopData(payload) {
+  function setClientDisplay(clientLabel, isUnmapped = false) {
+    if (!shopClient) return;
+    shopClient.textContent = clientLabel || 'Unmapped';
+    shopClient.classList.toggle('is-unmapped', Boolean(isUnmapped));
+  }
+
+  function resolveAndRenderClient(sellerId, forceRefresh = false) {
+    if (!shopClient) return;
+    if (!sellerId) {
+      setClientDisplay('Unmapped', true);
+      return;
+    }
+
+    chrome.runtime.sendMessage(
+      {
+        action: 'RESOLVE_SELLER_CLIENT',
+        sellerId,
+        forceRefresh
+      },
+      (res) => {
+        if (chrome.runtime.lastError || !res || !res.ok) {
+          setClientDisplay('Unmapped', true);
+          return;
+        }
+        setClientDisplay(res.client || 'Unmapped', Boolean(res.unmapped));
+      }
+    );
+  }
+
+  function renderShopData(payload, forceRefreshClient = false) {
     const shop = payload.active_shop || payload.shops[0];
     emptyState.classList.add('hidden');
     sellerSection.classList.remove('hidden');
 
     const country = shop.country || '--';
-    shopCountry.textContent = country;
-    shopName.textContent = shop.seller_name || 'TikTok Shop Seller';
     formattedSellerId.textContent = shop.formatted_seller_id;
+
+    if (!forceRefreshClient && shop.resolved_client) {
+      setClientDisplay(shop.resolved_client, shop.resolved_client === 'Unmapped');
+    } else if (!shopClient.textContent || shopClient.textContent === '--') {
+      setClientDisplay('Loading...', false);
+    }
+    resolveAndRenderClient(shop.formatted_seller_id, forceRefreshClient);
 
     if (regionParamBadge) {
       regionParamBadge.textContent = `?shop_region=${country}`;
@@ -372,8 +419,10 @@ document.addEventListener('DOMContentLoaded', () => {
       if (activeTab?.id) {
         chrome.tabs.sendMessage(activeTab.id, { action: 'REFRESH_SELLER_DATA' }, () => {
           void chrome.runtime.lastError;
-          setTimeout(loadStoredData, 300);
+          setTimeout(() => loadStoredData(true), 300);
         });
+      } else {
+        loadStoredData(true);
       }
     });
   });
