@@ -1,4 +1,4 @@
-const BG_VERSION = '2.2.1';
+const BG_VERSION = '2.2.2';
 
 const REPORT_PREFIX_MAP = {
   live_linked: '1_LIVE_Linked',
@@ -91,7 +91,10 @@ function parseSheetYamlText(yamlText) {
   const activeStatusRange = kv.active_status
     ? normalizeA1RangeJs(kv.active_status)
     : '';
-  const credentialsFile = (kv.credentials_file || 'config/service.json').replace(/^\.?\//, '');
+  const credentialsFile = (kv.credentials_file || 'config/service.json')
+    .replace(/\\+/g, '/')
+    .replace(/^\.?\/+/, '')
+    .replace(/^extension\/+/i, '');
   const platform = (kv.platform || kv.platform_filter || 'TTK').toUpperCase();
   const activeOnly = kv.active_only
     ? ['true', '1', 'yes'].includes(kv.active_only.toLowerCase())
@@ -245,13 +248,21 @@ async function fetchSheetClientMappingFromGoogle() {
     const codeKey = (idVal || fullVal.split(' - ').pop() || '').trim().toUpperCase();
     if (!codeKey) continue;
 
-    let list = buckets.get(codeKey);
-    if (!list) {
-      list = [];
-      buckets.set(codeKey, list);
+    const candidateKeys = new Set([codeKey]);
+    const codeMatch = `${idVal} ${fullVal}`.toUpperCase().match(/([A-Z]{2}\.[A-Z]{3}\.\d+)/);
+    if (codeMatch) {
+      candidateKeys.add(codeMatch[1]);
     }
-    if (!list.includes(clientName)) {
-      list.push(clientName);
+
+    for (const key of candidateKeys) {
+      let list = buckets.get(key);
+      if (!list) {
+        list = [];
+        buckets.set(key, list);
+      }
+      if (!list.includes(clientName)) {
+        list.push(clientName);
+      }
     }
   }
 

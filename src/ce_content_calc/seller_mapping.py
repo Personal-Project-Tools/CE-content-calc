@@ -53,7 +53,8 @@ def normalize_a1_range(raw_range: str) -> str:
 
 
 def _resolve_project_path(raw_path: str | Path) -> Path:
-    path = Path(raw_path)
+    normalized = str(raw_path).replace("\\", "/").strip()
+    path = Path(normalized)
     if path.is_absolute():
         return path
     return PROJECT_ROOT / path
@@ -98,7 +99,8 @@ def load_sheet_config(
         raise ValueError(f"Missing 'worksheet' name in {sheet_config_path}.")
 
     ranges = section.get("ranges") if isinstance(section.get("ranges"), dict) else {}
-    filters = section.get("filters") if isinstance(section.get("filters"), dict) else {}
+    raw_filters = section.get("filters") if isinstance(section.get("filters"), dict) else section.get("filter")
+    filters = raw_filters if isinstance(raw_filters, dict) else {}
 
     raw_full_range = ranges.get("seller_full_match") or section.get("seller_full_match")
     raw_id_range = ranges.get("seller_used_id") or section.get("seller_id_range")
