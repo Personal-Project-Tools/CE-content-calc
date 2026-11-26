@@ -1,99 +1,104 @@
-# Hướng Dẫn Sử Dụng Bộ Công Cụ Báo Cáo TikTok Content
+# TikTok Content Report Automation & Calculator — User Guide
 
-Tài liệu này hướng dẫn đầy đủ quy trình vận hành hằng ngày cho người sử dụng cuối: từ thiết lập máy ban đầu, tự động tải báo cáo trên TikTok Seller Center, tổng hợp số liệu ra file Excel chung theo từng khách hàng/ngày (đối chiếu tự động từ Google Sheets nội bộ), đến dọn dẹp dữ liệu cũ để tiết kiệm bộ nhớ máy tính.
+This guide covers the complete daily operational workflow for end users: one-time initial machine setup, automated report downloading from TikTok Seller Center, metric aggregation into a consolidated Excel workbook mapped against your internal Google Sheet, and disk cleanup for old daily reports.
 
 ---
 
-## Tổng Quan Quy Trình 3 Bước
+## 3-Step Workflow Overview
 
-| Bước | Công cụ sử dụng | Việc cần làm | Kết quả nhận được |
+| Step | Tool Used | Action | Output |
 |---|---|---|---|
-| **Bước 1** | Chrome Extension (**TikTok Content Calc**) | Chọn shop → chọn ngày/tháng → bấm tự động xuất báo cáo | Tối đa 4 file báo cáo gốc được tự động xếp vào `data\raw_file\Daily\<Ngày>\<Seller ID>\` hoặc `data\raw_file\Monthly\<Tháng>\<Seller ID>\` |
-| **Bước 2** | Terminal (`calculate_reports.py`) | Chạy lệnh tổng hợp số liệu & tự động đối chiếu khách hàng qua Google Sheets | Xuất ra 1 file Excel tổng tại `data\reports\tiktok_content_metrics.xlsx` (chia sheet theo ngày/tháng) |
-| **Bước 3** | Terminal (`delete_reports.py`) | Xóa các thư mục ngày cũ không còn dùng trong `data\raw_file\Daily\` | Giải phóng dung lượng ổ cứng, giữ lại file kết quả tổng hợp |
+| **Step 1** | Chrome Extension (**TikTok Content Calc**) | Select shop → choose Single Day or Month → run auto export | Up to 4 raw report files automatically saved to `data\raw_file\Daily\<Date>\<Seller ID>\` or `data\raw_file\Monthly\<Month>\<Seller ID>\` |
+| **Step 2** | Terminal (`calculate_reports.py`) | Run aggregation command & auto-map Clients via Google Sheets | Consolidated Excel workbook exported to `data\reports\tiktok_content_metrics.xlsx` (one sheet per date/month) |
+| **Step 3** | Terminal (`delete_reports.py`) | Delete old daily folders inside `data\raw_file\Daily\` by date range | Frees local disk space while preserving the consolidated Excel report |
 
 ---
 
-## Phần 1: Thiết Lập Ban Đầu (Chỉ Làm 1 Lần Trên Máy Mới)
+## Part 1: One-Time Initial Setup (New Machine Only)
 
-### 1.1. Tắt thông báo hỏi vị trí lưu file trên Chrome
-Để quá trình xuất nhiều báo cáo liên tục không bị gián đoạn bởi cửa sổ hỏi chỗ lưu (`Save As`):
-1. Mở trình duyệt Chrome, nhập vào thanh địa chỉ: `chrome://settings/downloads`
-2. Tìm mục **Ask where to save each file before downloading** (*Hỏi vị trí lưu từng tệp trước khi tải xuống*).
-3. **Tắt** công tắc này (gạt sang trái).
+### 1.1. Disable Chrome's "Ask where to save each file" prompt
+To allow continuous background downloading without `Save As` dialog interruptions:
+1. Open Google Chrome and navigate to: `chrome://settings/downloads`
+2. Locate **Ask where to save each file before downloading**.
+3. **Turn OFF** this toggle.
 
-### 1.2. Liên kết thư mục tải xuống với thư mục `data\raw_file\`
-Chạy file `scripts\setup-reports-junction.bat` (nhấp đúp trực tiếp hoặc chạy từ Terminal trong thư mục dự án).
+### 1.2. Link Chrome Downloads to `data\raw_file\` and Extension Config
+Run `scripts\setup-reports-junction.bat` (double-click the file or run it from Terminal inside the project root):
 
-* Tác dụng: Mọi báo cáo Chrome tải về thư mục `%USERPROFILE%\Downloads\CE-Reports` sẽ được dẫn thẳng vào `data\raw_file\` bên trong bộ công cụ.
-* Nếu trước đó máy bạn đã có sẵn thư mục `Downloads\CE-Reports` chứa báo cáo cũ, file `.bat` này sẽ tự động chuyển toàn bộ dữ liệu sang `data\raw_file\` rồi tạo liên kết.
+```powershell
+.\scripts\setup-reports-junction.bat
+```
 
-### 1.3. Cài đặt Chrome Extension
-1. Mở Chrome, truy cập địa chỉ: `chrome://extensions`
-2. Bật công tắc **Developer mode** (*Chế độ dành cho nhà phát triển*) ở góc trên bên phải.
-3. Nhấn nút **Load unpacked** (*Tải tiện ích đã giải nén*).
-4. Chọn thư mục **`extension`** nằm bên trong thư mục dự án (`...\CE-content-calc\extension`).
-5. Nhấn biểu tượng mảnh ghép trên thanh công cụ Chrome và **Ghim (Pin)** tiện ích **TikTok Content Calc** để tiện thao tác.
+* What it does:
+  1. Creates a Windows directory junction routing `%USERPROFILE%\Downloads\CE-Reports` directly into `data\raw_file\` (and automatically creates `Daily\` and `Monthly\` subfolders). If `Downloads\CE-Reports` already existed with previous files, it automatically migrates them into `data\raw_file\` before creating the link.
+  2. Links `extension\config` to `config\` so the Chrome Extension can read your Google Sheets configuration directly.
 
-> **Lưu ý:** Mỗi khi bộ công cụ có cập nhật mới, hãy vào lại `chrome://extensions` và nhấn biểu tượng **Reload (🔄)** tại thẻ của tiện ích này.
+### 1.3. Install the Chrome Extension
+1. Open Chrome and navigate to: `chrome://extensions`
+2. Turn ON **Developer mode** in the top-right corner.
+3. Click **Load unpacked** in the top-left corner.
+4. Select the **`extension`** folder inside this project (`...\CE-content-calc\extension`).
+5. Click the puzzle icon on Chrome's toolbar and **Pin** **TikTok Content Calc** for quick access.
 
-### 1.4. Cài đặt thư viện Python & Cấu hình kết nối Google Sheets (Bảo mật nội bộ)
-Để đảm bảo bảo mật dữ liệu khách hàng (Data Privacy), thông tin đối chiếu `Clients <-> Seller ID` không lưu trực tiếp trên Git mà được đọc qua Google Service Account từ bảng Google Sheets nội bộ:
+> **Note:** Whenever you pull new project updates, open `chrome://extensions` and click the **Reload (🔄)** icon on the **TikTok Content Calc** card.
 
-1. Cài đặt các thư viện cần thiết vào môi trường Python (`>= 3.11`):
+### 1.4. Install Python Requirements & Configure Google Sheets Connection
+To protect client data privacy, `Clients <-> Seller ID` mapping is not stored in Git. Instead, it is fetched directly from your internal Google Sheet using a Google Service Account:
+
+1. Install the required Python packages (`Python >= 3.11`):
    ```powershell
    pip install -r requirements.txt
    ```
-2. Đặt file khóa JSON của Google Service Account vào `config\service.json` (file này đã được ẩn trong `.gitignore`). Đảm bảo Google Sheet nội bộ đã cấp quyền **Viewer** cho địa chỉ `client_email` trong `service.json`.
-3. Tạo file `config\sheet.yaml` dựa trên bản mẫu [config/sheet.example.yaml](config/sheet.example.yaml) và điền `spreadsheet_id` thực tế:
+2. Place your Google Service Account JSON key inside `config\service_account.json` (or `config\service.json`). Make sure the internal Google Sheet grants **Viewer** access to the `client_email` inside that JSON key.
+3. Create `config\sheet.yaml` from [config/sheet.example.yaml](config/sheet.example.yaml) and fill in your actual `spreadsheet_id`:
    ```yaml
    sheet:
-     credentials_file: "config/service.json"
+     credentials_file: "config/service_account.json"
      spreadsheet_id: "<YOUR_GOOGLE_SPREADSHEET_ID>"
      worksheet: "seller_scope"
      ranges:
-       seller_full_match: "AV4:AV"  # Định dạng: <company> - <COUNTRY>.TTK.<SELLER_ID>
-       seller_used_id: "AW4:AW"     # Định dạng: <COUNTRY>.TTK.<SELLER_ID>
-       active_status: "I4:I"        # Trạng thái Active selling (TRUE / FALSE)
+       seller_full_match: "AV4:AV"  # Format: <company> - <COUNTRY>.TTK.<SELLER_ID>
+       seller_used_id: "AW4:AW"     # Format: <COUNTRY>.TTK.<SELLER_ID>
+       active_status: "I4:I"        # Active selling status (TRUE / FALSE)
      filters:
        platform: "TTK"
-       active_only: true            # Chỉ đối chiếu các shop có active_status == TRUE
+       active_only: true            # Only match rows where active_status == TRUE
    ```
 
 ---
 
-## Phần 2: Bước 1 — Tải Báo Cáo Từ TikTok Shop
+## Part 2: Step 1 — Download Reports from TikTok Seller Center
 
-### Bước 1: Mở đúng Shop trên TikTok Seller Center
-1. Đăng nhập tài khoản TikTok Seller Center trên Chrome và chọn đúng shop cần lấy báo cáo.
-2. Nhấn vào biểu tượng Extension **TikTok Content Calc** trên thanh công cụ Chrome.
-3. Kiểm tra khung thông tin Shop ở đầu popup:
-   * Hiển thị đúng mã quốc gia (`SG`, `MY`, `PH`, `VN`, `TH`, `ID`...), tên shop và mã Seller ID dạng `<QUỐC_GIA>.TTK.<SELLER_ID>` (có nút **Copy** nếu cần sao chép nhanh).
-   * Nếu màn hình báo **`No Seller ID Detected`**: nhấn nút **Open TikTok Seller Center** (hoặc chuyển sang tab Seller Center đang mở và chờ trang tải xong), sau đó nhấn **Refresh**.
+### 1. Open the Target Shop on TikTok Seller Center
+1. Sign in to TikTok Seller Center (or Tokopedia Seller Center for `ID`) in Chrome and select the shop you want to export.
+2. Click the **TikTok Content Calc** extension icon on the Chrome toolbar.
+3. Verify the Seller card at the top of the popup:
+   * Displays the matched **`Client:`** name from Google Sheets (`Unmapped` if not listed/active on the Sheet) and the standardized Seller ID `<COUNTRY>.TTK.<SELLER_ID>` (with a **Copy** button).
+   * If you see **`No Seller ID Detected`**: click **Open TikTok Seller Center** (or switch to your open Seller Center tab and wait for it to finish loading), then click **Refresh**.
 
-### Bước 2: Chọn chế độ thời gian (`1. Task Mode & Period`)
-Chọn một trong hai chế độ phù hợp với nhu cầu lấy số liệu:
-* **`Single Day (Daily)`**: Tải báo cáo theo **1 ngày cụ thể**. Chọn đúng ngày ở ô chọn ngày bên dưới.
-* **`Month (Monthly)`**: Tải báo cáo theo **cả 1 tháng** (tự động chọn trọn tháng trên lịch). Chọn đúng tháng/năm ở ô chọn tháng bên dưới.
+### 2. Choose Task Mode & Period (`1. Task Mode & Period`)
+Select one of the two reporting modes:
+* **`Single Day (Daily)`**: Exports reports for **one specific date**. Pick your target date in the date input below.
+* **`Month (Monthly)`**: Exports reports for **an entire month** (automatically selects the full month on the calendar). Pick your target year/month in the month input below.
 
-### Bước 3: Chạy xuất báo cáo (`2. Export Reports`)
-* Nhấn **`▶ Auto Export All 4 Reports`** *(khuyên dùng)* để công cụ tự động tải lần lượt đầy đủ 4 đầu mục báo cáo cho shop và thời gian đã chọn:
-  1. `1_LIVE_Linked.xlsx` — Kênh `LIVE -> Details`, tab `Linked accounts`
-  2. `2_LIVE_Affiliate.xlsx` — Kênh `LIVE -> Details`, tab `Affiliate accounts`
-  3. `3_Video_Linked.xlsx` — Kênh `Video -> Details`, tab `Linked accounts`
-  4. `4_Video_Affiliate.xlsx` — Kênh `Video -> Details`, tab `Affiliate accounts`
-* Hoặc nếu chỉ cần tải bù một kênh riêng lẻ, bạn có thể nhấn **`Export LIVE Reports`** (chỉ tải 2 file LIVE) hoặc **`Export Video Reports`** (chỉ tải 2 file Video).
+### 3. Start Automated Export (`2. Export Reports`)
+* Click **`▶ Auto Export All 4 Reports`** *(Recommended)* to automatically export all 4 reports in the background for the selected shop and period:
+  1. `1_LIVE_Linked.xlsx` — `LIVE -> Details`, `Linked accounts` tab
+  2. `2_LIVE_Affiliate.xlsx` — `LIVE -> Details`, `Affiliate accounts` tab
+  3. `3_Video_Linked.xlsx` — `Video -> Details`, `Linked accounts` tab
+  4. `4_Video_Affiliate.xlsx` — `Video -> Details`, `Affiliate accounts` tab
+* Alternatively, click **`Export LIVE Reports`** (only the 2 LIVE files) or **`Export Video Reports`** (only the 2 Video files) if you only need to re-download a single channel.
 
-> **Lưu ý khi công cụ đang chạy:**
-> * Bạn vẫn có thể chuyển sang làm việc trên tab khác của Chrome trong lúc chờ xuất báo cáo.
-> * **Không đóng trình duyệt Chrome** và **không đăng xuất khỏi Seller Center** trước khi thanh trạng thái trên popup báo hoàn tất (`✓ Completed: ... exported!`).
+> **Notes While Running:**
+> * The export runs unattended in a pinned background tab — you can freely switch to other tabs or applications while it runs.
+> * **Do not close Chrome** and **do not log out of Seller Center** until the popup status bar displays `✓ Completed: ... exported!`.
 
-### Bước 4: Kiểm tra dữ liệu đã tải
-Các file tải về được tự động phân loại gọn gàng theo chế độ **Daily** (`Single Day (Daily)`) hoặc **Monthly** (`Month (Monthly)`):
-* Chế độ ngày (`Single Day (Daily)`): `data\raw_file\Daily\<YYYY-MM-DD>\<SELLER_ID>\`
-* Chế độ tháng (`Month (Monthly)`): `data\raw_file\Monthly\<YYYY-MM>\<SELLER_ID>\`
+### 4. Verify Downloaded Raw Files
+Downloaded files are automatically organized into `Daily` or `Monthly` folders under `data\raw_file\`:
+* Single Day mode (`Single Day (Daily)`): `data\raw_file\Daily\<YYYY-MM-DD>\<SELLER_ID>\`
+* Monthly mode (`Month (Monthly)`): `data\raw_file\Monthly\<YYYY-MM>\<SELLER_ID>\`
 
-Ví dụ cho ngày `2026-11-18` (Daily) và tháng `2026-10` (Monthly) của shop `MY.TTK.1000000000000000001`:
+Example for date `2026-11-18` (Daily) and month `2026-10` (Monthly) of shop `MY.TTK.1000000000000000001`:
 
 ```text
 data/
@@ -114,87 +119,87 @@ data/
                 └── 4_Video_Affiliate.xlsx
 ```
 
-* Lặp lại thao tác chuyển Shop → kiểm tra ngày/tháng → nhấn **`▶ Auto Export All 4 Reports`** cho các shop tiếp theo.
-* Nút **`Clear Data`** ở cuối popup dùng để xóa nhật ký hiển thị tạm trên giao diện Extension khi bắt đầu lượt mới (không xóa các file báo cáo đã tải về máy).
+* Repeat the steps (switch Shop → verify Date/Month → click **`▶ Auto Export All 4 Reports`**) for your remaining shops.
+* The **`Clear Data`** button at the bottom of the popup clears temporary UI state in the popup without deleting any downloaded `.xlsx` files on disk.
 
 ---
 
-## Phần 3: Bước 2 — Tính Toán & Xuất File Excel Tổng Hợp
+## Part 3: Step 2 — Calculate Metrics & Export Consolidated Excel
 
-Sau khi đã tải xong báo cáo cho tất cả các shop và các ngày cần lấy số:
+Once you have downloaded reports for all required shops and dates/months:
 
-1. Mở **Terminal** (hoặc **PowerShell**) ngay tại thư mục gốc của dự án (`CE-content-calc`).
-2. Chạy lệnh sau:
+1. Open **Terminal** (or **PowerShell**) in the project root directory (`CE-content-calc`).
+2. Run:
 
 ```powershell
 python scripts\calculate_reports.py
 ```
 
-*(Tùy chọn nâng cao)* Bạn có thể truyền thêm tham số tùy chỉnh đường dẫn cấu hình hoặc file `.xlsx` offline nếu cần:
+*(Optional custom flags)* You can override the raw files directory, Google Sheet config path, or output Excel file path:
 
 ```powershell
-python scripts\calculate_reports.py --reports-dir <thư_mục_raw_file> --sheet-config config\sheet.yaml --output <file_kết_quả>
+python scripts\calculate_reports.py --reports-dir <raw_file_dir> --sheet-config config\sheet.yaml --output <output_xlsx_path>
 ```
 
-### Cấu trúc file Excel kết quả
-File tổng hợp được lưu tại: **`data\reports\tiktok_content_metrics.xlsx`**
+### Output Excel Structure
+The consolidated workbook is saved to: **`data\reports\tiktok_content_metrics.xlsx`**
 
-* **Cách chia sheet:** Mỗi ngày (`YYYY-MM-DD`) hoặc tháng (`YYYY-MM`) có trong `data\raw_file\` sẽ tạo thành **1 sheet riêng** (ví dụ `2026-11-16`, `2026-11-18`). Mỗi sheet chứa số liệu của **toàn bộ các Seller ID** đã tải trong ngày/tháng đó.
-* **Ý nghĩa các cột trong mỗi sheet:**
+* **Sheet layout:** Each date (`YYYY-MM-DD`) or month (`YYYY-MM`) found under `data\raw_file\Daily\` and `data\raw_file\Monthly\` is written to **its own worksheet** (e.g., `2026-11-16`, `2026-11-18`, `2026-10`). Each sheet contains **all Seller IDs** downloaded for that period.
+* **Columns in each worksheet:**
 
-| Tên cột | Mô tả chi tiết |
+| Column | Description |
 |---|---|
-| **`Clients`** | Tên khách hàng (`<company>`) tách từ cột `seller_full_match` (`AV4:AV`) trên tab `seller_scope`. Nếu mã shop chưa có trên Google Sheet sẽ hiển thị `Unmapped`. |
-| **`Seller ID`** | Tên Seller ID đầy đủ (`<company> - <QUỐC_GIA>.TTK.<SELLER_ID>`) lấy từ cột `AV4:AV` (nếu `Unmapped` sẽ giữ nguyên mã `<QUỐC_GIA>.TTK.<SELLER_ID>` của thư mục tải về). |
-| **`Date`** | Ngày hoặc tháng tương ứng của báo cáo (`YYYY-MM-DD` hoặc `YYYY-MM`). |
-| **`Content Type`** | Mỗi shop trong ngày có 2 dòng tách biệt: **`TikTok Content Live`** và **`TikTok Content Video`**. |
-| **`revenue`** | Tổng doanh thu: dòng LIVE cộng cột `LIVE-attributed GMV` từ 2 file LIVE; dòng Video cộng cột `Video-attributed GMV` từ 2 file Video. |
-| **`product_impression`** | Tổng `Product Impressions`: cộng từ 2 file thuộc cùng kênh (LIVE hoặc Video). |
-| **`impression`** | Tổng lượt xem: dòng LIVE cộng cột `Views` từ 2 file LIVE; dòng Video cộng cột `Video views` (`Video Views` / `VV`) từ 2 file Video. |
+| **`Clients`** | Client name (`<company>`) extracted from `seller_full_match` (`AV4:AV`) on the `seller_scope` Google Sheet tab. Shows `Unmapped` if not found or inactive. |
+| **`Seller ID`** | Full Seller ID label (`<company> - <COUNTRY>.TTK.<SELLER_ID>`) from column `AV4:AV` (or the raw `<COUNTRY>.TTK.<SELLER_ID>` folder name if `Unmapped`). |
+| **`Date`** | Reporting date or month (`YYYY-MM-DD` or `YYYY-MM`). |
+| **`Content Type`** | Two rows per seller per period: **`TikTok Content Live`** and **`TikTok Content Video`**. |
+| **`revenue`** | Total GMV: LIVE sums `LIVE-attributed GMV` across both LIVE files; Video sums `Video-attributed GMV` across both Video files. |
+| **`product_impression`** | Total `Product Impressions` summed across the 2 files of the same channel (LIVE or Video). |
+| **`impression`** | Total views: LIVE sums `Views` across both LIVE files; Video sums `Video views` (`Video Views` / `VV`) across both Video files. |
 
 ---
 
-## Phần 4: Bước 3 — Dọn Dẹp Báo Cáo Cũ Để Tiết Kiệm Bộ Nhớ
+## Part 4: Step 3 — Clean Up Old Daily Reports to Free Disk Space
 
-Sau thời gian dài sử dụng, thư mục `data\raw_file\` có thể chiếm nhiều dung lượng ổ cứng. Bạn có thể xóa nhanh toàn bộ dữ liệu báo cáo gốc theo một khoảng ngày cụ thể (định dạng `YYYY-MM-DD`, tính cả ngày bắt đầu và ngày kết thúc).
+Over time, downloaded files in `data\raw_file\Daily\` can consume significant disk space. You can bulk-delete daily report folders across an inclusive date range (`YYYY-MM-DD`).
 
-### 1. Xem trước các thư mục sẽ bị xóa (khuyên chạy trước để tránh xóa nhầm)
+### 1. Preview folders to be deleted (Recommended first step)
 ```powershell
 python scripts\delete_reports.py --start '2026-11-15' --end '2026-11-18' --dry-run
 ```
-Lệnh `--dry-run` **chỉ in ra danh sách các thư mục nằm trong khoảng ngày đã chọn** để bạn kiểm tra, hoàn toàn không xóa dữ liệu thật.
+`--dry-run` **only lists the matching date folders** and file sizes without deleting anything.
 
-### 2. Thực hiện xóa chính thức
-Sau khi xác nhận đúng các ngày cần bỏ, bỏ `--dry-run` và chạy:
+### 2. Permanently delete the date range
+Once you have verified the target dates, run the command without `--dry-run`:
 ```powershell
 python scripts\delete_reports.py --start '2026-11-15' --end '2026-11-18'
 ```
 
-> **Lưu ý:**
-> * Lệnh này chỉ xóa các thư mục ngày `YYYY-MM-DD` nằm trong khoảng `--start` đến `--end` bên trong `data\raw_file\` (bao gồm toàn bộ thư mục Seller ID và file bên trong các ngày đó).
-> * File Excel tổng hợp đã xuất trong `data\reports\` và các thư mục tháng `YYYY-MM` sẽ **không** bị xóa bởi lệnh này.
+> **Note:**
+> * This command deletes `YYYY-MM-DD` folders between `--start` and `--end` (inclusive) inside `data\raw_file\Daily\`.
+> * Consolidated reports in `data\reports\` and monthly folders in `data\raw_file\Monthly\` are **never** touched by this command.
 
 ---
 
-## Phần 5: Các Tình Huống Thường Gặp & Cách Xử Lý
+## Part 5: Common Scenarios & Troubleshooting
 
-### 1. Một số shop tải về ít hơn 4 file (chỉ có 1, 2 hoặc 3 file)
-* **Nguyên nhân:** Trên giao diện TikTok Seller Center của ngày/tháng đó, một số tab (ví dụ `Affiliate accounts`) hiện thông báo **`No available data yet`** và nút Export bị khóa không bấm được.
-* **Cách xử lý:** Đây là hành vi bình thường. Extension tự động bỏ qua tab bị thiếu dữ liệu để chuyển sang tải các tab còn lại mà không làm dừng quy trình. Khi chạy `calculate_reports.py`, phần tab/kênh không có file sẽ được tính là `0`.
+### 1. A shop folder has fewer than 4 files (only 1, 2, or 3 files)
+* **Cause:** On TikTok Seller Center for that date/month, one or more tabs (such as `Affiliate accounts`) displayed **`No available data yet`** with the `Export` button disabled.
+* **Resolution:** This is normal behavior. The extension automatically skips empty tabs and continues exporting the remaining tabs without interruption. When running `calculate_reports.py`, missing tabs/channels are safely calculated as `0`.
 
-### 2. Extension báo lỗi `Platform do not have Content Video report for YYYY-MM-DD` hoặc `Platform do not have Content LIVE report for YYYY-MM-DD`
-* **Nguyên nhân:** Toàn bộ kênh Video hoặc LIVE cho ngày/tháng bạn vừa chọn chưa có báo cáo trên TikTok Seller Center (hoặc shop chưa phát sinh dữ liệu và nền tảng chưa hỗ trợ xuất).
-* **Cách xử lý:** Kiểm tra lại ngày bạn chọn trên popup đã đúng chưa, hoặc mở trực tiếp trang đó trên Seller Center để kiểm tra xem nền tảng đã hiển thị dữ liệu hay chưa.
+### 2. Extension shows `Platform do not have Content Video report for YYYY-MM-DD` or `Platform do not have Content LIVE report for YYYY-MM-DD`
+* **Cause:** The target date or month is disabled/unavailable on TikTok Seller Center's calendar for that channel.
+* **Resolution:** Double-check the selected date/month in the popup or open Seller Center directly to verify whether data for that date has been published by TikTok yet.
 
-### 3. Extension hiện cảnh báo `⚠️ Please click Reload (🔄) on chrome://extensions to activate Reports/ folder routing.` hoặc file bị tải vào `Downloads` thay vì `data\raw_file\`
-* **Cách xử lý:**
-  1. Mở `chrome://extensions` và nhấn nút **Reload (🔄)** tại tiện ích **TikTok Content Calc**.
-  2. Đảm bảo bạn đã chạy `scripts\setup-reports-junction.bat` ít nhất 1 lần.
-  3. Kiểm tra lại mục `chrome://settings/downloads` đã tắt tùy chọn *Ask where to save each file before downloading* chưa.
+### 3. Extension warns `⚠️ Please click Reload (🔄) on chrome://extensions to activate Reports/ folder routing.` or files download into `Downloads` instead of `data\raw_file\`
+* **Resolution:**
+  1. Open `chrome://extensions` and click **Reload (🔄)** on **TikTok Content Calc**.
+  2. Make sure you have run `.\scripts\setup-reports-junction.bat` at least once.
+  3. Confirm that *Ask where to save each file before downloading* is turned **OFF** in `chrome://settings/downloads`.
 
-### 4. Trong file Excel kết quả, cột `Clients` bị ghi là `Unmapped`
-* **Nguyên nhân:** Mã Seller ID của shop vừa tải chưa có trên tab `seller_scope` của Google Sheet nội bộ (cột `AV4:AV` / `AW4:AW`).
-* **Cách xử lý:** Bổ sung shop mới vào tab `seller_scope` trên Google Sheet, sau đó chạy lại lệnh `python scripts\calculate_reports.py`.
+### 4. `Client` in the popup or `Clients` column in Excel shows `Unmapped`
+* **Cause:** The shop's Seller ID is not listed in the `seller_scope` tab of your internal Google Sheet (`AV4:AV` / `AW4:AW`), or its active status in column `I` (`I4:I`) is set to `FALSE`.
+* **Resolution:** Add the shop to the `seller_scope` Google Sheet tab (and ensure column `I` is `TRUE`), then click **Refresh** in the extension popup or re-run `python scripts\calculate_reports.py`.
 
-### 5. Popup luôn báo `No Seller ID Detected`
-* **Cách xử lý:** Đảm bảo bạn đã đăng nhập đúng tài khoản TikTok Seller Center trên Chrome, nhấn **Open TikTok Seller Center** (hoặc chuyển sang tab của shop đó), chờ trang tải đầy đủ thông tin rồi nhấn **Refresh** trên popup.
+### 5. Popup shows `No Seller ID Detected`
+* **Resolution:** Ensure you are logged in to TikTok Seller Center in Chrome, click **Open TikTok Seller Center** (or switch to your active Seller Center tab), wait for the page to finish loading, and click **Refresh** in the popup.
