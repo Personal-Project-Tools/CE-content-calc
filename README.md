@@ -8,9 +8,9 @@ Tài liệu này hướng dẫn đầy đủ quy trình vận hành hằng ngày
 
 | Bước | Công cụ sử dụng | Việc cần làm | Kết quả nhận được |
 |---|---|---|---|
-| **Bước 1** | Chrome Extension (**TikTok Content Calc**) | Chọn shop → chọn ngày/tháng → bấm tự động xuất báo cáo | Tối đa 4 file báo cáo gốc được tự động xếp vào `data\raw_file\<Ngày>\<Seller ID>\` |
-| **Bước 2** | Terminal (`calculate_reports.py`) | Chạy lệnh tổng hợp số liệu & tự động đối chiếu khách hàng qua Google Sheets | Xuất ra 1 file Excel tổng tại `data\reports\tiktok_content_metrics.xlsx` (chia sheet theo ngày) |
-| **Bước 3** | Terminal (`delete_reports.py`) | Xóa các thư mục ngày cũ không còn dùng trong `data\raw_file\` | Giải phóng dung lượng ổ cứng, giữ lại file kết quả tổng hợp |
+| **Bước 1** | Chrome Extension (**TikTok Content Calc**) | Chọn shop → chọn ngày/tháng → bấm tự động xuất báo cáo | Tối đa 4 file báo cáo gốc được tự động xếp vào `data\raw_file\Daily\<Ngày>\<Seller ID>\` hoặc `data\raw_file\Monthly\<Tháng>\<Seller ID>\` |
+| **Bước 2** | Terminal (`calculate_reports.py`) | Chạy lệnh tổng hợp số liệu & tự động đối chiếu khách hàng qua Google Sheets | Xuất ra 1 file Excel tổng tại `data\reports\tiktok_content_metrics.xlsx` (chia sheet theo ngày/tháng) |
+| **Bước 3** | Terminal (`delete_reports.py`) | Xóa các thư mục ngày cũ không còn dùng trong `data\raw_file\Daily\` | Giải phóng dung lượng ổ cứng, giữ lại file kết quả tổng hợp |
 
 ---
 
@@ -89,20 +89,29 @@ Chọn một trong hai chế độ phù hợp với nhu cầu lấy số liệu:
 > * **Không đóng trình duyệt Chrome** và **không đăng xuất khỏi Seller Center** trước khi thanh trạng thái trên popup báo hoàn tất (`✓ Completed: ... exported!`).
 
 ### Bước 4: Kiểm tra dữ liệu đã tải
-Các file tải về được tự động phân loại gọn gàng theo cấu trúc 3 tầng:
-`data\raw_file\<YYYY-MM-DD hoặc YYYY-MM>\<SELLER_ID>\`
+Các file tải về được tự động phân loại gọn gàng theo chế độ **Daily** (`Single Day (Daily)`) hoặc **Monthly** (`Month (Monthly)`):
+* Chế độ ngày (`Single Day (Daily)`): `data\raw_file\Daily\<YYYY-MM-DD>\<SELLER_ID>\`
+* Chế độ tháng (`Month (Monthly)`): `data\raw_file\Monthly\<YYYY-MM>\<SELLER_ID>\`
 
-Ví dụ cho ngày `2026-11-18` của shop `MY.TTK.1000000000000000001`:
+Ví dụ cho ngày `2026-11-18` (Daily) và tháng `2026-10` (Monthly) của shop `MY.TTK.1000000000000000001`:
 
 ```text
 data/
 └── raw_file/
-    └── 2026-11-18/
-        └── MY.TTK.1000000000000000001/
-            ├── 1_LIVE_Linked.xlsx
-            ├── 2_LIVE_Affiliate.xlsx
-            ├── 3_Video_Linked.xlsx
-            └── 4_Video_Affiliate.xlsx
+    ├── Daily/
+    │   └── 2026-11-18/
+    │       └── MY.TTK.1000000000000000001/
+    │           ├── 1_LIVE_Linked.xlsx
+    │           ├── 2_LIVE_Affiliate.xlsx
+    │           ├── 3_Video_Linked.xlsx
+    │           └── 4_Video_Affiliate.xlsx
+    └── Monthly/
+        └── 2026-10/
+            └── MY.TTK.1000000000000000001/
+                ├── 1_LIVE_Linked.xlsx
+                ├── 2_LIVE_Affiliate.xlsx
+                ├── 3_Video_Linked.xlsx
+                └── 4_Video_Affiliate.xlsx
 ```
 
 * Lặp lại thao tác chuyển Shop → kiểm tra ngày/tháng → nhấn **`▶ Auto Export All 4 Reports`** cho các shop tiếp theo.

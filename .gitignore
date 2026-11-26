@@ -27,6 +27,12 @@ extension/config/
 # Runtime downloaded raw files & generated Excel outputs
 data/raw_file/*
 !data/raw_file/.gitkeep
+!data/raw_file/Daily/
+data/raw_file/Daily/*
+!data/raw_file/Daily/.gitkeep
+!data/raw_file/Monthly/
+data/raw_file/Monthly/*
+!data/raw_file/Monthly/.gitkeep
 data/reports/*
 !data/reports/.gitkeep
 

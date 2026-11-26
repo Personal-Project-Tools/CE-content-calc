@@ -1,4 +1,4 @@
-const BG_VERSION = '2.2.5';
+const BG_VERSION = '2.2.6';
 
 const REPORT_PREFIX_MAP = {
   live_linked: '1_LIVE_Linked',
@@ -414,14 +414,16 @@ function getSellerAndPeriodFolder() {
 
   const recentExpected = isRecentExpectedDownload();
   const periodCfg = (recentExpected ? cachedExpectedDownload?.periodConfig : null) || cachedPeriodConfig;
+  const isMonthMode = periodCfg?.mode === 'month';
+  const modeFolder = isMonthMode ? 'Monthly' : 'Daily';
   const rawPeriod = periodCfg
-    ? periodCfg.mode === 'month'
+    ? isMonthMode
       ? periodCfg.month
       : periodCfg.date
     : '';
   const periodLabel = sanitizeFilenamePart(rawPeriod, getTodayLocalDateStr());
 
-  return { sellerId, periodLabel, recentExpected };
+  return { sellerId, modeFolder, periodLabel, recentExpected };
 }
 
 function resolveDownloadSuggestion(downloadItem, suggest) {
@@ -435,13 +437,13 @@ function resolveDownloadSuggestion(downloadItem, suggest) {
   const ext = dotIdx > 0 ? rawBasename.slice(dotIdx) : '.xlsx';
   const rawStem = dotIdx > 0 ? rawBasename.slice(0, dotIdx) : rawBasename;
 
-  const { sellerId, periodLabel, recentExpected } = getSellerAndPeriodFolder();
+  const { sellerId, modeFolder, periodLabel, recentExpected } = getSellerAndPeriodFolder();
 
   const reportKey = recentExpected ? cachedExpectedDownload?.reportKey : null;
   const reportPrefix =
     (reportKey && REPORT_PREFIX_MAP[reportKey]) || sanitizeFilenamePart(rawStem, 'report');
 
-  const relativePath = `CE-Reports/${periodLabel}/${sellerId}/${reportPrefix}${ext}`;
+  const relativePath = `CE-Reports/${modeFolder}/${periodLabel}/${sellerId}/${reportPrefix}${ext}`;
   suggest({ filename: relativePath, conflictAction: 'overwrite' });
 }
 
