@@ -254,7 +254,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadWorkflowState();
 
   // Verify background service worker is up-to-date and downloads.onDeterminingFilename is active
-  const EXPECTED_BG_VERSION = '2.2.1';
+  const EXPECTED_BG_VERSION = '2.2.4';
   chrome.runtime.sendMessage({ action: 'CHECK_BACKGROUND_READY' }, (res) => {
     if (chrome.runtime.lastError || !res || !res.ok) {
       renderWorkflowLog({

@@ -36,16 +36,66 @@
   // --- Utility & XPath Helpers ---
 
   /**
+   * Disables CSS transition/animation delays on opening Arco Design popups so background tabs
+   * (where Chromium suspends CSS animation frames) never leave opening popups stuck at opacity: 0,
+   * while allowing exiting/hidden popups to close immediately.
+   */
+  function ensureBackgroundPopupStyleFix() {
+    if (document.getElementById('ttk-ext-bg-popup-fix')) return;
+    const styleEl = document.createElement('style');
+    styleEl.id = 'ttk-ext-bg-popup-fix';
+    styleEl.textContent = `
+      .arco-trigger:not([class*="exit"]):not([class*="leave"]):not([class*="hidden"]),
+      .arco-picker-container:not([class*="exit"]):not([class*="leave"]):not([class*="hidden"]),
+      [class*="trigger-popup"]:not([class*="exit"]):not([class*="leave"]):not([class*="hidden"]),
+      [class*="picker-container"]:not([class*="exit"]):not([class*="leave"]):not([class*="hidden"]),
+      [class*="picker-dropdown"]:not([class*="exit"]):not([class*="leave"]):not([class*="hidden"]) {
+        transition: none !important;
+        transition-duration: 0s !important;
+        animation: none !important;
+        animation-duration: 0s !important;
+        opacity: 1 !important;
+      }
+      .arco-trigger[class*="exit"],
+      .arco-trigger[class*="leave"],
+      .arco-trigger[class*="hidden"],
+      [class*="arco-fade-exit"],
+      [class*="arco-fade-leave"],
+      [class*="arco-zoom"][class*="exit"],
+      [class*="arco-zoom"][class*="leave"] {
+        transition: none !important;
+        transition-duration: 0s !important;
+        animation: none !important;
+        animation-duration: 0s !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+        display: none !important;
+      }
+    `;
+    (document.head || document.documentElement).appendChild(styleEl);
+  }
+
+  function flushMainWorldRaf() {
+    try {
+      window.dispatchEvent(new CustomEvent('TTK_FLUSH_BACKGROUND_RAF'));
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
    * Sleeps via background service worker timer so inactive background tabs
    * are not throttled to 1s+ timer ticks by Chrome.
    */
   function sleep(ms) {
+    flushMainWorldRaf();
     if (ms <= 0) return Promise.resolve();
     return new Promise((resolve) => {
       let settled = false;
       const done = () => {
         if (settled) return;
         settled = true;
+        flushMainWorldRaf();
         resolve();
       };
       const fallbackTimer = setTimeout(done, ms + 1500);
@@ -148,6 +198,10 @@
     if (typeof element.focus === 'function') {
       element.focus({ preventScroll: true });
     }
+    if (document.hidden || !document.hasFocus()) {
+      element.dispatchEvent(new FocusEvent('focus', { bubbles: false }));
+      element.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    }
     element.dispatchEvent(new PointerEvent('pointerup', eventInit));
     element.dispatchEvent(new MouseEvent('mouseup', eventInit));
 
@@ -156,6 +210,7 @@
     } else {
       element.dispatchEvent(new MouseEvent('click', eventInit));
     }
+    flushMainWorldRaf();
     return true;
   }
 
@@ -184,53 +239,101 @@
 
   function findDatePickerTriggerCandidates() {
     const candidates = [];
+    const addCandidate = (el) => {
+      if (el && !candidates.includes(el)) {
+        candidates.push(el);
+      }
+    };
 
-    // Exact XPaths from your Recorder JSONs:
-    // 1. LIVE_Details_workflow: //*[@id="page-title-datepicker"]/div/div[2]/div[3]/input
-    const xpathInput = getElementByXPath('//*[@id="page-title-datepicker"]//input');
-    if (xpathInput) candidates.push(xpathInput);
+    // 1. Exact XPaths from Recorder JSONs:
+    // LIVE_Details_workflow: //*[@id="page-title-datepicker"]/div/div[2]/div[3]/input
+    addCandidate(getElementByXPath('//*[@id="page-title-datepicker"]//input'));
 
-    // 2. Video_Details_workflow & Monthly_flow: //*[@id="page-title-datepicker"]/div/div[2]/div[4]/span/svg
-    const xpathIconSpan = getElementByXPath('//*[@id="page-title-datepicker"]/div/div[2]/div[4]/span');
-    if (xpathIconSpan) candidates.push(xpathIconSpan);
-
-    // 3. Picker wrapper inside #page-title-datepicker
+    // 2. Picker wrapper inside #page-title-datepicker
     const container = document.getElementById('page-title-datepicker');
     if (container && isElementVisible(container)) {
       const inputs = Array.from(container.querySelectorAll('input')).filter(isElementVisible);
-      candidates.push(...inputs);
-      const pickerBox = container.querySelector('[class*="picker"]');
-      if (pickerBox && isElementVisible(pickerBox)) candidates.push(pickerBox);
-      candidates.push(container);
+      inputs.forEach(addCandidate);
+      const pickerBox = container.querySelector('.arco-picker, [class*="picker"]');
+      if (pickerBox && isElementVisible(pickerBox)) addCandidate(pickerBox);
+    }
+
+    // 3. Video_Details_workflow & Monthly_flow calendar icon span
+    addCandidate(getElementByXPath('//*[@id="page-title-datepicker"]/div/div[2]/div[4]/span'));
+
+    if (container && isElementVisible(container)) {
+      addCandidate(container);
     }
 
     return candidates;
   }
 
+  function isPopupExitingOrHidden(el) {
+    if (!el || !(el instanceof Element)) return true;
+    let cur = el;
+    while (cur && cur !== document.body && cur !== document.documentElement) {
+      const cls = typeof cur.className === 'string' ? cur.className : cur.getAttribute('class') || '';
+      const clsLower = cls.toLowerCase();
+      if (
+        clsLower.includes('-exit') ||
+        clsLower.includes('-leave') ||
+        clsLower.includes('popup-hidden') ||
+        clsLower.includes('trigger-hidden')
+      ) {
+        return true;
+      }
+      const inlineStyle = (cur.getAttribute('style') || '').toLowerCase();
+      if (
+        inlineStyle.includes('display: none') ||
+        inlineStyle.includes('display:none') ||
+        inlineStyle.includes('visibility: hidden') ||
+        inlineStyle.includes('opacity: 0') ||
+        inlineStyle.includes('opacity:0') ||
+        inlineStyle.includes('pointer-events: none')
+      ) {
+        return true;
+      }
+      cur = cur.parentElement;
+    }
+    return false;
+  }
+
   function findOpenCalendarPopup() {
     // 1. From Monthly_flow JSON: div.arco-space containing "Day" and "Month"
     const spaceEl = Array.from(document.querySelectorAll('div.arco-space, div[class*="space"]')).find((el) => {
-      if (!isElementVisible(el)) return false;
+      if (!isElementVisible(el) || isPopupExitingOrHidden(el)) return false;
       const text = el.textContent || '';
       return text.includes('Day') && text.includes('Month');
     });
     if (spaceEl) {
       // Climb up to the popup root under body > div > span > div
-      return (
+      const root =
         spaceEl.closest('div[class*="trigger"], div[class*="picker-container"]') ||
         spaceEl.parentElement?.parentElement?.parentElement ||
-        spaceEl.parentElement?.parentElement
-      );
+        spaceEl.parentElement?.parentElement;
+      if (root && !isPopupExitingOrHidden(root)) {
+        return root;
+      }
     }
 
-    // 2. Fallback: look for any visible popup added at the end of document.body that has calendar days
-    const bodyPopups = Array.from(document.body.querySelectorAll('body > div > span > div, .arco-picker-container')).filter(
-      (el) => isElementVisible(el) && (el.textContent || '').includes('Mon') && (el.textContent || '').includes('Sun')
-    );
+    // 2. Fallback: look for any visible Arco picker popup added to document.body
+    const bodyPopups = Array.from(
+      document.body.querySelectorAll(
+        'body > div > span > div, .arco-picker-container, [class*="picker-container"], [class*="picker-dropdown"]'
+      )
+    ).filter((el) => {
+      if (!isElementVisible(el) || isPopupExitingOrHidden(el)) return false;
+      const text = el.textContent || '';
+      return (
+        (text.includes('Mon') && text.includes('Sun')) ||
+        (text.includes('Jan') && text.includes('Feb') && text.includes('Mar'))
+      );
+    });
     return bodyPopups[bodyPopups.length - 1] || null;
   }
 
   async function openDatePickerPopup() {
+    ensureBackgroundPopupStyleFix();
     logStep('Opening Date Picker (#page-title-datepicker)...');
     const ready = await waitForSelector(() => findDatePickerTriggerCandidates().length > 0, 12000, 300);
     if (!ready) {
@@ -242,9 +345,16 @@
 
     const candidates = findDatePickerTriggerCandidates();
     for (const trigger of candidates) {
+      popup = findOpenCalendarPopup();
+      if (popup) return popup;
+
       humanClick(trigger);
-      await sleep(150);
-      popup = await waitForSelector(findOpenCalendarPopup, 1500, 100);
+      await sleep(120);
+      flushMainWorldRaf();
+      await sleep(120);
+      flushMainWorldRaf();
+
+      popup = await waitForSelector(findOpenCalendarPopup, 2000, 120);
       if (popup) {
         logStep('Date Picker popup opened.');
         return popup;
@@ -550,9 +660,11 @@
       humanClick(monthState.element);
       await sleep(300);
 
-      const popupClosed = await waitForSelector(() => !findOpenCalendarPopup(), 1500, 100);
+      let popupClosed = await waitForSelector(() => !findOpenCalendarPopup(), 1500, 100);
       if (!popupClosed) {
-        throw buildMissingReportError(targetMonthLabel);
+        logStep('Month popup still visible after click -> dismissing popup...');
+        humanClick(document.body);
+        await sleep(250);
       }
       await sleep(300);
     } else {
@@ -587,14 +699,14 @@
       humanClick(dayState1.element);
       await sleep(400);
 
-      // On Video -> Details, Day mode is a Date Range picker: click the same day a 2nd time if popup remains open.
-      if (pageType === 'video' && findOpenCalendarPopup()) {
+      // On Video -> Details (or any Range Picker), Day mode requires 2 clicks on the target day if popup remains open.
+      if (findOpenCalendarPopup()) {
         const dayState2 = await waitForSelector(() => {
           const s = findDayCellStateInPopup(targetDay, targetYear, targetMonth);
           return s.found ? s : null;
         }, 2000, 100);
-        if (dayState2 && dayState2.element) {
-          logStep(`Click #2 on day ${targetDay} (Video range end)...`);
+        if (dayState2 && dayState2.element && !dayState2.disabled) {
+          logStep(`Click #2 on day ${targetDay}...`);
           humanClick(dayState2.element);
           await sleep(500);
         }
@@ -602,7 +714,9 @@
 
       const popupClosed = await waitForSelector(() => !findOpenCalendarPopup(), 1500, 100);
       if (!popupClosed) {
-        throw buildMissingReportError(targetDateLabel);
+        logStep('Day popup still visible after selecting enabled day -> dismissing popup...');
+        humanClick(document.body);
+        await sleep(250);
       }
       await sleep(300);
     }

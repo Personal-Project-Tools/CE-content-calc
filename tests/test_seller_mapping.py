@@ -109,6 +109,27 @@ sheet:
             self.assertEqual(cfg.active_status_range, "I4:I")
             self.assertTrue(cfg.active_only)
 
+            # Also verify singular 'filter:' key and backslash path handling
+            singular_yaml = tmp / "sheet_singular.yaml"
+            singular_yaml.write_text(
+                f"""
+sheet:
+  credentials_file: "{str(creds_file).replace('\\', '\\\\')}"
+  spreadsheet_id: "dummy_spreadsheet_123"
+  worksheet: "seller_scope"
+  ranges:
+    seller_full_match: "AV4:AV"
+    seller_used_id: "AW4:AW"
+  filter:
+    platform: "TTK"
+    active_only: false
+""",
+                encoding="utf-8",
+            )
+            singular_cfg = load_sheet_config(singular_yaml)
+            self.assertEqual(singular_cfg.credentials_file, creds_file)
+            self.assertFalse(singular_cfg.active_only)
+
             def fake_fetcher(
                 credentials: Path, spreadsheet_id: str, worksheet: str, ranges: list[str]
             ) -> list[list[list[str]]]:
