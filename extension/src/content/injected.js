@@ -14,6 +14,69 @@
     return;
   }
 
+  // Ensure requestAnimationFrame continues firing when the worker tab runs in the background (document.hidden === true).
+  // Arco Design's Trigger / DatePicker relies on requestAnimationFrame to mount and position calendar popups.
+  const origRAF = window.requestAnimationFrame.bind(window);
+  const origCAF = window.cancelAnimationFrame.bind(window);
+  const pendingRafQueue = new Map();
+
+  function runSinglePendingRaf(rafId, entry) {
+    if (!pendingRafQueue.has(rafId)) return;
+    pendingRafQueue.delete(rafId);
+    window.clearTimeout(entry.timerId);
+    origCAF(rafId);
+    try {
+      entry.callback(performance.now());
+    } catch (err) {
+      console.error('[TikTok Extension] Background rAF callback error:', err);
+    }
+  }
+
+  function flushPendingBackgroundRafs() {
+    if (pendingRafQueue.size === 0) return;
+    const snapshot = Array.from(pendingRafQueue.entries());
+    for (const [rafId, entry] of snapshot) {
+      runSinglePendingRaf(rafId, entry);
+    }
+  }
+
+  window.requestAnimationFrame = function (callback) {
+    if (typeof callback !== 'function') {
+      return origRAF(callback);
+    }
+    let rafId = 0;
+    const entry = {
+      callback,
+      timerId: 0
+    };
+    entry.timerId = window.setTimeout(() => {
+      runSinglePendingRaf(rafId, entry);
+    }, 32);
+
+    rafId = origRAF((ts) => {
+      if (!pendingRafQueue.has(rafId)) return;
+      pendingRafQueue.delete(rafId);
+      window.clearTimeout(entry.timerId);
+      callback(ts);
+    });
+
+    pendingRafQueue.set(rafId, entry);
+    return rafId;
+  };
+
+  window.cancelAnimationFrame = function (rafId) {
+    const entry = pendingRafQueue.get(rafId);
+    if (entry) {
+      window.clearTimeout(entry.timerId);
+      pendingRafQueue.delete(rafId);
+    }
+    return origCAF(rafId);
+  };
+
+  window.addEventListener('TTK_FLUSH_BACKGROUND_RAF', () => {
+    flushPendingBackgroundRafs();
+  });
+
   const TARGET_ENDPOINT = '/api/v1/seller/workbench/get_all_sellers';
   const EXPORT_ENDPOINT_HINTS = ['/live/list/export', '/video/analytics/video/list/export'];
   let lastCapturedPayload = null;

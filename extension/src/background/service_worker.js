@@ -1,4 +1,4 @@
-const BG_VERSION = '2.2.2';
+const BG_VERSION = '2.2.4';
 
 const REPORT_PREFIX_MAP = {
   live_linked: '1_LIVE_Linked',
