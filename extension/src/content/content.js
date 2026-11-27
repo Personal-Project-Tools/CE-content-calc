@@ -1258,7 +1258,11 @@
 
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'REFRESH_SELLER_DATA') {
-      window.dispatchEvent(new CustomEvent('TIKTOK_SELLER_REQUEST_STATE'));
+      window.dispatchEvent(
+        new CustomEvent('TIKTOK_SELLER_REQUEST_STATE', {
+          detail: { force: Boolean(request.force) }
+        })
+      );
       sendResponse({ status: 'requested' });
       return true;
     }

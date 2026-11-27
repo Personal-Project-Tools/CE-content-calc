@@ -200,6 +200,87 @@
     };
   }
 
+  function detectActiveRegionFromLocation(rawUrl) {
+    try {
+      const u = new URL(rawUrl || window.location.href);
+      const paramRegion = (
+        u.searchParams.get('shop_region') ||
+        u.searchParams.get('region') ||
+        ''
+      )
+        .trim()
+        .toUpperCase();
+      if (paramRegion) return paramRegion;
+
+      const hostMatch = u.hostname.toLowerCase().match(/^seller-([a-z]{2})\./);
+      if (hostMatch) return hostMatch[1].toUpperCase();
+      if (u.hostname.toLowerCase().includes('tokopedia.com')) return 'ID';
+    } catch {
+      // ignore
+    }
+    return '';
+  }
+
+  function detectActiveSellerIdFromLocation(rawUrl, data) {
+    try {
+      const u = new URL(rawUrl || window.location.href);
+      const paramSeller =
+        u.searchParams.get('seller_id') ||
+        u.searchParams.get('oec_seller_id') ||
+        u.searchParams.get('shop_id') ||
+        '';
+      if (paramSeller.trim()) return paramSeller.trim();
+    } catch {
+      // ignore
+    }
+    const apiActive =
+      data?.data?.active_seller_id ||
+      data?.data?.current_seller_id ||
+      data?.data?.seller_id ||
+      data?.active_seller_id ||
+      '';
+    return String(apiActive || '').trim();
+  }
+
+  function selectActiveShop(parsedShops, data) {
+    if (!parsedShops || parsedShops.length === 0) return null;
+    if (parsedShops.length === 1) return parsedShops[0];
+
+    const targetSellerId = detectActiveSellerIdFromLocation(window.location.href, data);
+    if (targetSellerId) {
+      const byId = parsedShops.find(
+        (s) =>
+          String(s.seller) === targetSellerId ||
+          String(s.global_seller_id) === targetSellerId ||
+          String(s.unified_seller_id) === targetSellerId
+      );
+      if (byId) return byId;
+    }
+
+    const targetRegion = detectActiveRegionFromLocation(window.location.href);
+    if (targetRegion) {
+      const byRegionAndFlag = parsedShops.find(
+        (s) =>
+          s.country === targetRegion &&
+          (s.raw_seller_info?.is_current ||
+            s.raw_seller_info?.active ||
+            s.raw_seller_info?.selected)
+      );
+      if (byRegionAndFlag) return byRegionAndFlag;
+
+      const byRegion = parsedShops.find((s) => s.country === targetRegion);
+      if (byRegion) return byRegion;
+    }
+
+    const byFlag = parsedShops.find(
+      (s) =>
+        s.raw_seller_info?.is_current ||
+        s.raw_seller_info?.active ||
+        s.raw_seller_info?.selected
+    );
+    return byFlag || parsedShops[0];
+  }
+
   function parseSellerData(data, requestUrl) {
     if (!data || typeof data !== 'object') return null;
 
@@ -244,9 +325,11 @@
 
     if (parsedShops.length === 0) return null;
 
+    const activeShop = selectActiveShop(parsedShops, data);
+
     return {
       shops: parsedShops,
-      active_shop: parsedShops[0],
+      active_shop: activeShop,
       raw_data: data,
       endpoint_url: requestUrl,
       timestamp: Date.now()
@@ -327,22 +410,49 @@
     };
   }
 
-  // 3. Listen for manual requests from extension
-  window.addEventListener('TIKTOK_SELLER_REQUEST_STATE', () => {
-    if (lastCapturedPayload) {
-      dispatchSellerData(lastCapturedPayload);
-    } else {
-      // If not captured yet, attempt a passive fetch with current page cookies/session
-      const currentUrl = new URL(window.location.href);
-      const testEndpoint = `${currentUrl.origin}${TARGET_ENDPOINT}?locale=en&language=en`;
-      fetch(testEndpoint, { credentials: 'include' })
-        .then(res => res.json())
-        .then(data => {
-          const payload = parseSellerData(data, testEndpoint);
-          if (payload) dispatchSellerData(payload);
-        })
-        .catch(() => {});
+  async function fetchFreshSellerData(forceNetwork = false) {
+    if (!forceNetwork && lastCapturedPayload?.raw_data) {
+      const reevaluated = parseSellerData(
+        lastCapturedPayload.raw_data,
+        lastCapturedPayload.endpoint_url
+      );
+      if (reevaluated) {
+        dispatchSellerData(reevaluated);
+        return reevaluated;
+      }
     }
+
+    try {
+      const currentUrl = new URL(window.location.href);
+      const testEndpoint = `${currentUrl.origin}${TARGET_ENDPOINT}?locale=en&language=en&_t=${Date.now()}`;
+      const res = await fetch(testEndpoint, {
+        credentials: 'include',
+        cache: 'no-store'
+      });
+      const data = await res.json();
+      const payload = parseSellerData(data, testEndpoint);
+      if (payload) {
+        dispatchSellerData(payload);
+        return payload;
+      }
+    } catch {
+      // Fall back to re-evaluating cached payload if network request fails
+    }
+
+    if (lastCapturedPayload?.raw_data) {
+      const fallback =
+        parseSellerData(lastCapturedPayload.raw_data, lastCapturedPayload.endpoint_url) ||
+        lastCapturedPayload;
+      dispatchSellerData(fallback);
+      return fallback;
+    }
+    return null;
+  }
+
+  // 3. Listen for manual requests from extension
+  window.addEventListener('TIKTOK_SELLER_REQUEST_STATE', (event) => {
+    const forceNetwork = Boolean(event?.detail?.force);
+    fetchFreshSellerData(forceNetwork);
   });
 
   console.log('[TikTok Extension] Injected Hook (MAIN world) listening for get_all_sellers API.');
