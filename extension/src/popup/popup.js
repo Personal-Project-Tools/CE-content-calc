@@ -254,7 +254,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadWorkflowState();
 
   // Verify background service worker is up-to-date and downloads.onDeterminingFilename is active
-  const EXPECTED_BG_VERSION = '2.2.6';
+  const EXPECTED_BG_VERSION = '2.2.7';
   chrome.runtime.sendMessage({ action: 'CHECK_BACKGROUND_READY' }, (res) => {
     if (chrome.runtime.lastError || !res || !res.ok) {
       renderWorkflowLog({
@@ -322,26 +322,46 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnClear = document.getElementById('btn-clear');
   const btnOpenSeller = document.getElementById('btn-open-seller');
 
+  function requestLiveTabSellerRefresh(tabId, forceNetwork = false, onDone = null) {
+    if (!tabId) {
+      loadStoredData(forceNetwork);
+      if (onDone) onDone();
+      return;
+    }
+    chrome.runtime.sendMessage(
+      {
+        action: 'FORCE_REFRESH_TAB_SELLER',
+        tabId,
+        forceNetwork
+      },
+      (res) => {
+        void chrome.runtime.lastError;
+        if (res?.ok && res.payload) {
+          renderShopData(res.payload, forceNetwork);
+        } else {
+          loadStoredData(forceNetwork);
+        }
+        if (onDone) onDone();
+      }
+    );
+  }
+
   // Check active tab domain
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     const activeTab = tabs[0];
     const isTikTokTab = isSupportedSellerUrl(activeTab?.url);
 
-    if (isTikTokTab) {
+    if (isTikTokTab && activeTab?.id) {
       statusBadge.className = 'status-badge status-connected';
       statusText.textContent = 'Seller Center Tab';
-      // Request active tab to re-verify state
-      chrome.tabs.sendMessage(activeTab.id, { action: 'REFRESH_SELLER_DATA' }, () => {
-        if (chrome.runtime.lastError) {
-          // Tab may not have finished loading or script injected yet
-        }
-      });
+      loadStoredData(false);
+      // Sync live seller state from the active tab (even if tab was opened before extension reload)
+      requestLiveTabSellerRefresh(activeTab.id, false);
     } else {
       statusBadge.className = 'status-badge status-inactive';
       statusText.textContent = 'Not on TikTok';
+      loadStoredData(false);
     }
-
-    loadStoredData();
   });
 
   function loadStoredData(forceRefreshClient = false) {
@@ -414,15 +434,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Refresh button
   btnRefresh.addEventListener('click', () => {
+    const origDisabled = btnRefresh.disabled;
+    btnRefresh.disabled = true;
+    if (shopClient && !sellerSection.classList.contains('hidden')) {
+      setClientDisplay('Refreshing...', false);
+    }
+
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const activeTab = tabs[0];
-      if (activeTab?.id) {
-        chrome.tabs.sendMessage(activeTab.id, { action: 'REFRESH_SELLER_DATA' }, () => {
-          void chrome.runtime.lastError;
-          setTimeout(() => loadStoredData(true), 300);
+      const isTikTokTab = isSupportedSellerUrl(activeTab?.url);
+      if (isTikTokTab && activeTab?.id) {
+        statusBadge.className = 'status-badge status-connected';
+        statusText.textContent = 'Seller Center Tab';
+        requestLiveTabSellerRefresh(activeTab.id, true, () => {
+          btnRefresh.disabled = origDisabled;
         });
       } else {
         loadStoredData(true);
+        btnRefresh.disabled = origDisabled;
       }
     });
   });

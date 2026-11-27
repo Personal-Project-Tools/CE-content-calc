@@ -1,4 +1,4 @@
-const BG_VERSION = '2.2.6';
+const BG_VERSION = '2.2.7';
 
 const REPORT_PREFIX_MAP = {
   live_linked: '1_LIVE_Linked',
@@ -753,6 +753,221 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     resolveClientForSellerId(message.sellerId, Boolean(message.forceRefresh)).then((res) => {
       sendResponse(res);
     });
+    return true;
+  }
+
+  if (message.action === 'FORCE_REFRESH_TAB_SELLER') {
+    const tabId = message.tabId;
+    const forceNetwork = Boolean(message.forceNetwork);
+    if (!tabId || !chrome.scripting) {
+      sendResponse({ ok: false, error: 'No active Seller Center tab' });
+      return false;
+    }
+
+    (async () => {
+      try {
+        // Ensure content.js & injected.js are loaded on tabs that were already open before extension load/reload
+        await chrome.scripting
+          .executeScript({
+            target: { tabId },
+            files: ['src/content/content.js']
+          })
+          .catch(() => {});
+        await chrome.scripting
+          .executeScript({
+            target: { tabId },
+            world: 'MAIN',
+            files: ['src/content/injected.js']
+          })
+          .catch(() => {});
+
+        // Execute live seller fetch directly in the tab's MAIN world
+        const results = await chrome.scripting.executeScript({
+          target: { tabId },
+          world: 'MAIN',
+          args: [forceNetwork],
+          func: async (shouldForceNetwork) => {
+            const endpoint = '/api/v1/seller/workbench/get_all_sellers';
+            const detectRegion = (rawUrl) => {
+              try {
+                const u = new URL(rawUrl || window.location.href);
+                const p = (
+                  u.searchParams.get('shop_region') ||
+                  u.searchParams.get('region') ||
+                  ''
+                )
+                  .trim()
+                  .toUpperCase();
+                if (p) return p;
+                const m = u.hostname.toLowerCase().match(/^seller-([a-z]{2})\./);
+                if (m) return m[1].toUpperCase();
+                if (u.hostname.toLowerCase().includes('tokopedia.com')) return 'ID';
+              } catch {
+                // ignore
+              }
+              return '';
+            };
+
+            const detectSellerId = (rawUrl, data) => {
+              try {
+                const u = new URL(rawUrl || window.location.href);
+                const s =
+                  u.searchParams.get('seller_id') ||
+                  u.searchParams.get('oec_seller_id') ||
+                  u.searchParams.get('shop_id') ||
+                  '';
+                if (s.trim()) return s.trim();
+              } catch {
+                // ignore
+              }
+              return String(
+                data?.data?.active_seller_id ||
+                  data?.data?.current_seller_id ||
+                  data?.data?.seller_id ||
+                  data?.active_seller_id ||
+                  ''
+              ).trim();
+            };
+
+            const buildPayload = (data, reqUrl) => {
+              const sellersData = data?.data?.sellers_data || data?.sellers_data;
+              if (!sellersData || typeof sellersData !== 'object') return null;
+
+              const parsedShops = [];
+              const origin = window.location.origin;
+              for (const [sellerKey, sellerInfo] of Object.entries(sellersData)) {
+                if (!sellerInfo || typeof sellerInfo !== 'object') continue;
+                const globalSeller = sellerInfo.global_seller || {};
+                const country = (globalSeller.base_region || 'UNKNOWN').toUpperCase();
+                const formattedSellerId = `${country}.TTK.${sellerKey}`;
+                parsedShops.push({
+                  formatted_seller_id: formattedSellerId,
+                  seller: sellerKey,
+                  country,
+                  seller_name: globalSeller.seller_name || 'Unnamed Shop',
+                  global_seller_id: globalSeller.global_seller_id || sellerKey,
+                  unified_seller_id: globalSeller.unified_seller_id || '',
+                  operation_mode: sellerInfo.operation_mode || '',
+                  status: globalSeller.status ?? null,
+                  seller_type: globalSeller.seller_type ?? null,
+                  report_urls: {
+                    live_details: `${origin}/compass/live-analysis/live-details?shop_region=${encodeURIComponent(country)}`,
+                    video_details: `${origin}/compass/video-analytics/video-details?platform_data_source=shop&shop_region=${encodeURIComponent(country)}`
+                  },
+                  raw_seller_info: sellerInfo
+                });
+              }
+              if (parsedShops.length === 0) return null;
+
+              let activeShop = parsedShops[0];
+              if (parsedShops.length > 1) {
+                const targetId = detectSellerId(window.location.href, data);
+                const targetRegion = detectRegion(window.location.href);
+                activeShop =
+                  (targetId &&
+                    parsedShops.find(
+                      (s) =>
+                        String(s.seller) === targetId ||
+                        String(s.global_seller_id) === targetId ||
+                        String(s.unified_seller_id) === targetId
+                    )) ||
+                  (targetRegion &&
+                    parsedShops.find(
+                      (s) =>
+                        s.country === targetRegion &&
+                        (s.raw_seller_info?.is_current ||
+                          s.raw_seller_info?.active ||
+                          s.raw_seller_info?.selected)
+                    )) ||
+                  (targetRegion && parsedShops.find((s) => s.country === targetRegion)) ||
+                  parsedShops.find(
+                    (s) =>
+                      s.raw_seller_info?.is_current ||
+                      s.raw_seller_info?.active ||
+                      s.raw_seller_info?.selected
+                  ) ||
+                  parsedShops[0];
+              }
+
+              return {
+                shops: parsedShops,
+                active_shop: activeShop,
+                raw_data: data,
+                endpoint_url: reqUrl,
+                timestamp: Date.now()
+              };
+            };
+
+            let payload = null;
+            if (!shouldForceNetwork && window.__TIKTOK_SELLER_CAPTURED_DATA__?.raw_data) {
+              payload = buildPayload(
+                window.__TIKTOK_SELLER_CAPTURED_DATA__.raw_data,
+                window.__TIKTOK_SELLER_CAPTURED_DATA__.endpoint_url
+              );
+            }
+
+            if (!payload) {
+              try {
+                const reqUrl = `${window.location.origin}${endpoint}?locale=en&language=en&_t=${Date.now()}`;
+                const res = await fetch(reqUrl, {
+                  credentials: 'include',
+                  cache: 'no-store'
+                });
+                const json = await res.json();
+                payload = buildPayload(json, reqUrl);
+              } catch {
+                // fallback to cached window payload if available
+              }
+            }
+
+            if (!payload && window.__TIKTOK_SELLER_CAPTURED_DATA__?.raw_data) {
+              payload = buildPayload(
+                window.__TIKTOK_SELLER_CAPTURED_DATA__.raw_data,
+                window.__TIKTOK_SELLER_CAPTURED_DATA__.endpoint_url
+              );
+            }
+
+            if (payload) {
+              window.__TIKTOK_SELLER_CAPTURED_DATA__ = payload;
+              window.dispatchEvent(
+                new CustomEvent('TIKTOK_SELLER_CAPTURED', { detail: payload })
+              );
+            }
+            return payload;
+          }
+        });
+
+        const payload = results?.[0]?.result || null;
+        if (!payload || !payload.shops || payload.shops.length === 0) {
+          sendResponse({ ok: false, error: 'Could not detect Seller ID on current tab' });
+          return;
+        }
+
+        const activeShop = payload.active_shop || payload.shops[0];
+        if (activeShop?.formatted_seller_id && cachedSheetClientMap) {
+          const matched = cachedSheetClientMap[activeShop.formatted_seller_id.toUpperCase()];
+          if (matched) {
+            activeShop.resolved_client = matched;
+          }
+        }
+
+        cachedSellerPayload = payload;
+        chrome.storage.local.set(
+          {
+            ttk_seller_payload: payload,
+            ttk_last_updated: Date.now()
+          },
+          () => {
+            const badgeText = activeShop?.country || `${payload.shops.length}`;
+            chrome.action.setBadgeText({ text: badgeText });
+            chrome.action.setBadgeBackgroundColor({ color: '#fe2c55' });
+            sendResponse({ ok: true, payload });
+          }
+        );
+      } catch (err) {
+        sendResponse({ ok: false, error: err?.message || String(err) });
+      }
+    })();
     return true;
   }
 
